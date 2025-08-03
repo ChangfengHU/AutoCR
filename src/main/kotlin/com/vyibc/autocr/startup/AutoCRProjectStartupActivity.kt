@@ -1,0 +1,128 @@
+package com.vyibc.autocr.startup
+
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.startup.ProjectActivity
+import com.vyibc.autocr.indexing.ProjectIndexingService
+import com.vyibc.autocr.settings.AutoCRSettingsState
+import org.slf4j.LoggerFactory
+
+/**
+ * AutoCR项目启动活动
+ * 在项目打开时执行初始化任务
+ */
+class AutoCRProjectStartupActivity : ProjectActivity {
+    private val logger = LoggerFactory.getLogger(AutoCRProjectStartupActivity::class.java)
+    
+    override suspend fun execute(project: Project) {
+        logger.info("AutoCR plugin starting up for project: {}", project.name)
+        
+        try {
+            // 延迟启动，避免影响IDE启动性能
+            kotlinx.coroutines.delay(3000)
+            
+            // 获取设置
+            val settings = AutoCRSettingsState.getInstance(project)
+            
+            // 显示欢迎通知
+            showWelcomeNotification(project)
+            
+            // 检查配置状态
+            checkConfigurationStatus(project, settings)
+            
+            // 自动启动索引（如果配置了）
+            if (settings.generalSettings.autoStartReview) {
+                logger.info("Auto-starting project indexing")
+                val indexingService = ProjectIndexingService.getInstance(project)
+                indexingService.startProjectIndexing(true) // 后台索引
+            }
+            
+            logger.info("AutoCR startup completed for project: {}", project.name)
+            
+        } catch (e: Exception) {
+            logger.error("Error during AutoCR startup", e)
+        }
+    }
+    
+    /**
+     * 显示欢迎通知
+     */
+    private fun showWelcomeNotification(project: Project) {
+        val isFirstTime = isFirstTimeUser(project)
+        
+        if (isFirstTime) {
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup("AutoCR")
+                .createNotification(
+                    "欢迎使用 AutoCR!",
+                    "AI代码评审插件已成功安装。请先在设置中配置AI供应商，然后开始项目索引。",
+                    com.intellij.notification.NotificationType.INFORMATION
+                )
+                .addAction(object : com.intellij.openapi.actionSystem.AnAction("打开设置") {
+                    override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                        com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                            .showSettingsDialog(project, "AutoCR")
+                    }
+                })
+                .addAction(object : com.intellij.openapi.actionSystem.AnAction("开始索引") {
+                    override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                        ProjectIndexingService.getInstance(project).startProjectIndexing()
+                    }
+                })
+                .notify(project)
+                
+            // 标记已显示欢迎信息
+            markWelcomeShown(project)
+        }
+    }
+    
+    /**
+     * 检查配置状态
+     */
+    private fun checkConfigurationStatus(project: Project, settings: AutoCRSettingsState) {
+        val enabledProviders = listOf(
+            settings.openAIConfig.enabled,
+            settings.anthropicConfig.enabled,
+            settings.googleConfig.enabled,
+            settings.ollamaConfig.enabled,
+            settings.azureOpenAIConfig.enabled
+        ).count { it }
+        
+        if (enabledProviders == 0) {
+            // 延迟显示配置提醒
+            Thread {
+                Thread.sleep(10000) // 10秒后显示
+                
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup("AutoCR")
+                    .createNotification(
+                        "AutoCR 需要配置",
+                        "还没有启用任何AI供应商，请在设置中配置API密钥。",
+                        com.intellij.notification.NotificationType.WARNING
+                    )
+                    .addAction(object : com.intellij.openapi.actionSystem.AnAction("立即配置") {
+                        override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                                .showSettingsDialog(project, "AutoCR")
+                        }
+                    })
+                    .notify(project)
+            }.start()
+        }
+    }
+    
+    /**
+     * 检查是否是首次使用
+     */
+    private fun isFirstTimeUser(project: Project): Boolean {
+        val cacheService = com.vyibc.autocr.cache.CacheService.getInstance(project)
+        return cacheService.get("welcome_shown") == null
+    }
+    
+    /**
+     * 标记欢迎信息已显示
+     */
+    private fun markWelcomeShown(project: Project) {
+        val cacheService = com.vyibc.autocr.cache.CacheService.getInstance(project)
+        cacheService.put("welcome_shown", true)
+    }
+}

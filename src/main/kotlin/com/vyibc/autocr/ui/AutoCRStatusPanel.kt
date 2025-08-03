@@ -1,0 +1,842 @@
+package com.vyibc.autocr.ui
+
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.ui.components.*
+import com.intellij.ui.content.ContentFactory
+import com.vyibc.autocr.indexing.ProjectIndexingService
+import com.vyibc.autocr.neo4j.Neo4jService
+import com.vyibc.autocr.settings.AutoCRSettingsState
+import org.slf4j.LoggerFactory
+import java.awt.*
+import java.awt.event.ActionEvent
+import java.awt.event.ActionListener
+import java.text.SimpleDateFormat
+import java.util.*
+import javax.swing.*
+
+/**
+ * AutoCR状态面板工厂
+ */
+class AutoCRStatusToolWindowFactory : ToolWindowFactory {
+    override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        val statusPanel = AutoCRStatusPanel(project)
+        val content = statusPanel.createContent()
+        
+        val contentFactory = ContentFactory.getInstance()
+        val toolWindowContent = contentFactory.createContent(content, "状态监控", false)
+        
+        toolWindow.contentManager.addContent(toolWindowContent)
+    }
+}
+
+/**
+ * AutoCR状态监控面板
+ */
+class AutoCRStatusPanel(private val project: Project) {
+    private val logger = LoggerFactory.getLogger(AutoCRStatusPanel::class.java)
+    
+    // 服务引用
+    private val indexingService = ProjectIndexingService.getInstance(project)
+    private val neo4jService = Neo4jService.getInstance(project)
+    private val settings = AutoCRSettingsState.getInstance(project)
+    
+    // UI组件
+    private lateinit var mainPanel: JPanel
+    private lateinit var indexingStatusPanel: JPanel
+    private lateinit var neo4jStatusPanel: JPanel
+    private lateinit var configStatusPanel: JPanel
+    
+    // 索引状态组件
+    private lateinit var indexingStatusLabel: JBLabel
+    private lateinit var indexingProgressBar: JProgressBar
+    private lateinit var indexingStatsLabel: JBLabel
+    private lateinit var lastIndexTimeLabel: JBLabel
+    private lateinit var forceReindexButton: JButton
+    
+    // Neo4j状态组件
+    private lateinit var neo4jStatusLabel: JBLabel
+    private lateinit var neo4jStatsLabel: JBLabel
+    private lateinit var testNeo4jButton: JButton
+    private lateinit var syncToNeo4jButton: JButton
+    
+    // 配置状态组件
+    private lateinit var configStatusLabel: JBLabel
+    private lateinit var enabledProvidersLabel: JBLabel
+    private lateinit var openSettingsButton: JButton
+    
+    // 定时刷新
+    private val refreshTimer = javax.swing.Timer(5000) { refreshStatus() }
+    
+    init {
+        refreshTimer.start()
+    }
+    
+    fun createContent(): JComponent {
+        mainPanel = JPanel(BorderLayout())
+        
+        val tabbedPane = JBTabbedPane()
+        
+        // 概览标签页
+        val overviewPanel = createOverviewPanel()
+        tabbedPane.addTab("概览", overviewPanel)
+        
+        // 索引状态标签页
+        indexingStatusPanel = createIndexingStatusPanel()
+        tabbedPane.addTab("项目索引", indexingStatusPanel)
+        
+        // Neo4j状态标签页
+        neo4jStatusPanel = createNeo4jStatusPanel()
+        tabbedPane.addTab("Neo4j", neo4jStatusPanel)
+        
+        // 配置状态标签页
+        configStatusPanel = createConfigStatusPanel()
+        tabbedPane.addTab("配置", configStatusPanel)
+        
+        mainPanel.add(tabbedPane, BorderLayout.CENTER)
+        
+        // 初始化状态
+        refreshStatus()
+        
+        return mainPanel
+    }
+    
+    /**
+     * 创建概览面板
+     */
+    private fun createOverviewPanel(): JPanel {
+        val panel = JPanel(BorderLayout())
+        val contentPanel = JPanel()
+        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+        contentPanel.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        
+        // 标题
+        val titleLabel = JBLabel("<html><h2>AutoCR 状态概览</h2></html>")
+        contentPanel.add(titleLabel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        
+        // 快速状态卡片
+        val quickStatusPanel = createQuickStatusCards()
+        contentPanel.add(quickStatusPanel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        
+        // 操作按钮
+        val actionPanel = createQuickActionsPanel()
+        contentPanel.add(actionPanel)
+        
+        contentPanel.add(Box.createVerticalGlue())
+        
+        panel.add(contentPanel, BorderLayout.CENTER)
+        return panel
+    }
+    
+    /**
+     * 创建快速状态卡片
+     */
+    private fun createQuickStatusCards(): JPanel {
+        val panel = JPanel(GridLayout(2, 2, 10, 10))
+        
+        // 索引状态卡片
+        val indexCard = createStatusCard("项目索引", "检查中...", Color.ORANGE)
+        panel.add(indexCard)
+        
+        // Neo4j状态卡片
+        val neo4jCard = createStatusCard("Neo4j数据库", "检查中...", Color.ORANGE)
+        panel.add(neo4jCard)
+        
+        // AI配置卡片
+        val aiCard = createStatusCard("AI供应商", "检查中...", Color.ORANGE)
+        panel.add(aiCard)
+        
+        // 总体状态卡片
+        val overallCard = createStatusCard("总体状态", "检查中...", Color.ORANGE)
+        panel.add(overallCard)
+        
+        return panel
+    }
+    
+    /**
+     * 创建状态卡片
+     */
+    private fun createStatusCard(title: String, status: String, color: Color): JPanel {
+        val card = JPanel(BorderLayout())
+        card.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(color, 2),
+            BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        )
+        card.background = Color.WHITE
+        
+        val titleLabel = JBLabel("<html><b>$title</b></html>")
+        val statusLabel = JBLabel(status)
+        statusLabel.foreground = color
+        
+        card.add(titleLabel, BorderLayout.NORTH)
+        card.add(statusLabel, BorderLayout.CENTER)
+        
+        return card
+    }
+    
+    /**
+     * 创建快速操作面板
+     */
+    private fun createQuickActionsPanel(): JPanel {
+        val panel = JPanel()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+        panel.border = BorderFactory.createTitledBorder("快速操作")
+        
+        val buttonPanel = JPanel()
+        buttonPanel.layout = BoxLayout(buttonPanel, BoxLayout.X_AXIS)
+        
+        val startIndexButton = JButton("开始项目索引").apply {
+            addActionListener { indexingService.startProjectIndexing() }
+        }
+        
+        val openSettingsBtn = JButton("打开设置").apply {
+            addActionListener { openSettings() }
+        }
+        
+        val refreshStatusBtn = JButton("刷新状态").apply {
+            addActionListener { refreshStatus() }
+        }
+        
+        val syncToNeo4jBtn = JButton("🔄 同步到Neo4j").apply {
+            addActionListener { syncKnowledgeGraphToNeo4j() }
+            toolTipText = "手动将项目知识图谱同步到Neo4j数据库 (Ctrl+Alt+N)"
+            background = java.awt.Color(34, 139, 34)  // 森林绿
+            foreground = java.awt.Color.WHITE
+            isOpaque = true
+            font = font.deriveFont(java.awt.Font.BOLD)
+            preferredSize = java.awt.Dimension(140, 30)
+        }
+        
+        buttonPanel.add(startIndexButton)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(syncToNeo4jBtn)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(openSettingsBtn)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(refreshStatusBtn)
+        buttonPanel.add(Box.createHorizontalGlue())
+        
+        panel.add(buttonPanel)
+        
+        return panel
+    }
+    
+    /**
+     * 创建索引状态面板
+     */
+    private fun createIndexingStatusPanel(): JPanel {
+        val panel = JPanel(BorderLayout())
+        val contentPanel = JPanel()
+        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+        contentPanel.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        
+        // 状态信息
+        val statusInfoPanel = JPanel()
+        statusInfoPanel.border = BorderFactory.createTitledBorder("索引状态")
+        statusInfoPanel.layout = BoxLayout(statusInfoPanel, BoxLayout.Y_AXIS)
+        
+        indexingStatusLabel = JBLabel("状态: 检查中...")
+        indexingProgressBar = JProgressBar(0, 100)
+        indexingProgressBar.isStringPainted = true
+        indexingStatsLabel = JBLabel("统计: 加载中...")
+        lastIndexTimeLabel = JBLabel("上次索引: 从未")
+        
+        statusInfoPanel.add(indexingStatusLabel)
+        statusInfoPanel.add(Box.createVerticalStrut(5))
+        statusInfoPanel.add(indexingProgressBar)
+        statusInfoPanel.add(Box.createVerticalStrut(5))
+        statusInfoPanel.add(indexingStatsLabel)
+        statusInfoPanel.add(Box.createVerticalStrut(5))
+        statusInfoPanel.add(lastIndexTimeLabel)
+        
+        // 操作按钮
+        val buttonPanel = JPanel()
+        buttonPanel.layout = BoxLayout(buttonPanel, BoxLayout.X_AXIS)
+        
+        forceReindexButton = JButton("强制重新索引").apply {
+            addActionListener { 
+                val result = JOptionPane.showConfirmDialog(
+                    this@AutoCRStatusPanel.mainPanel,
+                    "确定要强制重新索引整个项目吗？这可能需要一些时间。",
+                    "确认重新索引",
+                    JOptionPane.YES_NO_OPTION
+                )
+                if (result == JOptionPane.YES_OPTION) {
+                    indexingService.forceReindex()
+                }
+            }
+        }
+        
+        val viewStatsButton = JButton("查看详细统计").apply {
+            addActionListener { showIndexingStats() }
+        }
+        
+        buttonPanel.add(forceReindexButton)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(viewStatsButton)
+        buttonPanel.add(Box.createHorizontalGlue())
+        
+        contentPanel.add(statusInfoPanel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        contentPanel.add(buttonPanel)
+        contentPanel.add(Box.createVerticalGlue())
+        
+        panel.add(contentPanel, BorderLayout.CENTER)
+        return panel
+    }
+    
+    /**
+     * 创建Neo4j状态面板
+     */
+    private fun createNeo4jStatusPanel(): JPanel {
+        val panel = JPanel(BorderLayout())
+        val contentPanel = JPanel()
+        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+        contentPanel.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        
+        // 连接状态
+        val connectionPanel = JPanel()
+        connectionPanel.border = BorderFactory.createTitledBorder("连接状态")
+        connectionPanel.layout = BoxLayout(connectionPanel, BoxLayout.Y_AXIS)
+        
+        neo4jStatusLabel = JBLabel("状态: 检查中...")
+        neo4jStatsLabel = JBLabel("数据库统计: 加载中...")
+        
+        connectionPanel.add(neo4jStatusLabel)
+        connectionPanel.add(Box.createVerticalStrut(5))
+        connectionPanel.add(neo4jStatsLabel)
+        
+        // 操作按钮
+        val buttonPanel = JPanel()
+        buttonPanel.layout = BoxLayout(buttonPanel, BoxLayout.X_AXIS)
+        
+        testNeo4jButton = JButton("测试连接").apply {
+            addActionListener { testNeo4jConnection() }
+        }
+        
+        syncToNeo4jButton = JButton("🚀 立即同步").apply {
+            addActionListener { syncKnowledgeGraphToNeo4j() }
+            toolTipText = "将项目知识图谱同步到Neo4j数据库"
+            background = java.awt.Color(255, 140, 0)  // 橙色
+            foreground = java.awt.Color.WHITE
+            isOpaque = true
+            font = font.deriveFont(java.awt.Font.BOLD)
+        }
+        
+        val configNeo4jButton = JButton("配置Neo4j").apply {
+            addActionListener { openSettings() }
+        }
+        
+        buttonPanel.add(testNeo4jButton)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(syncToNeo4jButton)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(configNeo4jButton)
+        buttonPanel.add(Box.createHorizontalGlue())
+        
+        contentPanel.add(connectionPanel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        contentPanel.add(buttonPanel)
+        contentPanel.add(Box.createVerticalGlue())
+        
+        panel.add(contentPanel, BorderLayout.CENTER)
+        return panel
+    }
+    
+    /**
+     * 创建配置状态面板
+     */
+    private fun createConfigStatusPanel(): JPanel {
+        val panel = JPanel(BorderLayout())
+        val contentPanel = JPanel()
+        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+        contentPanel.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        
+        // 配置状态
+        val configInfoPanel = JPanel()
+        configInfoPanel.border = BorderFactory.createTitledBorder("配置状态")
+        configInfoPanel.layout = BoxLayout(configInfoPanel, BoxLayout.Y_AXIS)
+        
+        configStatusLabel = JBLabel("配置状态: 检查中...")
+        enabledProvidersLabel = JBLabel("已启用的AI供应商: 检查中...")
+        
+        configInfoPanel.add(configStatusLabel)
+        configInfoPanel.add(Box.createVerticalStrut(5))
+        configInfoPanel.add(enabledProvidersLabel)
+        
+        // 配置按钮
+        val buttonPanel = JPanel()
+        buttonPanel.layout = BoxLayout(buttonPanel, BoxLayout.X_AXIS)
+        
+        openSettingsButton = JButton("打开设置").apply {
+            addActionListener { openSettings() }
+        }
+        
+        val validateConfigButton = JButton("验证配置").apply {
+            addActionListener { validateConfiguration() }
+        }
+        
+        buttonPanel.add(openSettingsButton)
+        buttonPanel.add(Box.createHorizontalStrut(10))
+        buttonPanel.add(validateConfigButton)
+        buttonPanel.add(Box.createHorizontalGlue())
+        
+        contentPanel.add(configInfoPanel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        contentPanel.add(buttonPanel)
+        contentPanel.add(Box.createVerticalGlue())
+        
+        panel.add(contentPanel, BorderLayout.CENTER)
+        return panel
+    }
+    
+    /**
+     * 刷新状态
+     */
+    private fun refreshStatus() {
+        SwingUtilities.invokeLater {
+            updateIndexingStatus()
+            updateNeo4jStatus()
+            updateConfigStatus()
+        }
+    }
+    
+    /**
+     * 更新索引状态
+     */
+    private fun updateIndexingStatus() {
+        val status = indexingService.getIndexingStatus()
+        
+        val statusText = when {
+            status.isIndexing -> "正在索引中..."
+            status.isIndexed -> "已完成索引"
+            else -> "未索引"
+        }
+        
+        indexingStatusLabel.text = "状态: $statusText"
+        
+        if (status.isIndexing) {
+            val progress = if (status.totalFiles > 0) {
+                (status.processedFiles * 100) / status.totalFiles
+            } else 0
+            indexingProgressBar.value = progress
+            indexingProgressBar.string = "${status.processedFiles}/${status.totalFiles} 文件"
+        } else {
+            indexingProgressBar.value = if (status.isIndexed) 100 else 0
+            indexingProgressBar.string = if (status.isIndexed) "完成" else "未开始"
+        }
+        
+        indexingStatsLabel.text = "统计: ${status.totalClasses} 个类, ${status.totalMethods} 个方法, ${status.totalEdges} 个关系"
+        
+        if (status.lastIndexTime > 0) {
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+            lastIndexTimeLabel.text = "上次索引: ${dateFormat.format(Date(status.lastIndexTime))}"
+        } else {
+            lastIndexTimeLabel.text = "上次索引: 从未"
+        }
+        
+        forceReindexButton.isEnabled = !status.isIndexing
+    }
+    
+    /**
+     * 更新Neo4j状态
+     */
+    private fun updateNeo4jStatus() {
+        if (!settings.neo4jConfig.enabled) {
+            neo4jStatusLabel.text = "状态: 未启用"
+            neo4jStatsLabel.text = "Neo4j未在配置中启用"
+            syncToNeo4jButton.isEnabled = false
+            return
+        }
+        
+        val testResult = neo4jService.testConnection()
+        
+        neo4jStatusLabel.text = if (testResult.success) {
+            "状态: 已连接 (${testResult.responseTime}ms)"
+        } else {
+            "状态: 连接失败 - ${testResult.message}"
+        }
+        
+        val stats = neo4jService.getDatabaseStats()
+        neo4jStatsLabel.text = if (stats != null) {
+            "数据库: ${stats.totalNodes} 个节点, ${stats.totalRelationships} 个关系, ${stats.databaseSize}"
+        } else {
+            "数据库统计: 无法获取"
+        }
+        
+        syncToNeo4jButton.isEnabled = testResult.success && !indexingService.getIndexingStatus().isIndexing
+    }
+    
+    /**
+     * 更新配置状态
+     */
+    private fun updateConfigStatus() {
+        val enabledProviders = mutableListOf<String>()
+        
+        if (settings.openAIConfig.enabled) enabledProviders.add("OpenAI")
+        if (settings.anthropicConfig.enabled) enabledProviders.add("Anthropic")
+        if (settings.googleConfig.enabled) enabledProviders.add("Google")
+        if (settings.ollamaConfig.enabled) enabledProviders.add("Ollama")
+        if (settings.azureOpenAIConfig.enabled) enabledProviders.add("Azure OpenAI")
+        
+        val configValid = enabledProviders.isNotEmpty()
+        
+        configStatusLabel.text = if (configValid) {
+            "配置状态: 配置有效"
+        } else {
+            "配置状态: 需要配置AI供应商"
+        }
+        
+        enabledProvidersLabel.text = if (enabledProviders.isNotEmpty()) {
+            "已启用的AI供应商: ${enabledProviders.joinToString(", ")}"
+        } else {
+            "已启用的AI供应商: 无"
+        }
+    }
+    
+    /**
+     * 测试Neo4j连接
+     */
+    private fun testNeo4jConnection() {
+        testNeo4jButton.text = "测试中..."
+        testNeo4jButton.isEnabled = false
+        
+        Thread {
+            val result = neo4jService.testConnection()
+            
+            SwingUtilities.invokeLater {
+                testNeo4jButton.text = "测试连接"
+                testNeo4jButton.isEnabled = true
+                
+                val messageType = if (result.success) {
+                    JOptionPane.INFORMATION_MESSAGE
+                } else {
+                    JOptionPane.ERROR_MESSAGE
+                }
+                
+                JOptionPane.showMessageDialog(
+                    mainPanel,
+                    "连接测试结果: ${result.message}\\n响应时间: ${result.responseTime}ms",
+                    "Neo4j连接测试",
+                    messageType
+                )
+            }
+        }.start()
+    }
+    
+    /**
+     * 同步到Neo4j
+     */
+    private fun syncToNeo4j() {
+        syncToNeo4jButton.text = "同步中..."
+        syncToNeo4jButton.isEnabled = false
+        
+        Thread {
+            val psiService = com.vyibc.autocr.psi.PSIService.getInstance(project)
+            val codeGraph = psiService.getCodeGraph()
+            val result = neo4jService.syncCodeGraphToNeo4j(codeGraph)
+            
+            SwingUtilities.invokeLater {
+                syncToNeo4jButton.text = "同步数据"
+                syncToNeo4jButton.isEnabled = true
+                
+                val messageType = if (result.success) {
+                    JOptionPane.INFORMATION_MESSAGE
+                } else {
+                    JOptionPane.ERROR_MESSAGE
+                }
+                
+                JOptionPane.showMessageDialog(
+                    mainPanel,
+                    "同步结果: ${result.message}\\n" +
+                    "同步节点: ${result.syncedNodes}\\n" +
+                    "同步关系: ${result.syncedEdges}\\n" +
+                    "耗时: ${result.duration}ms",
+                    "Neo4j同步结果",
+                    messageType
+                )
+                
+                // 刷新状态
+                updateNeo4jStatus()
+            }
+        }.start()
+    }
+    
+    /**
+     * 显示索引统计详情
+     */
+    private fun showIndexingStats() {
+        val summary = indexingService.getIndexingSummary()
+        
+        val message = if (summary != null) {
+            """
+            项目: ${summary.projectName}
+            
+            文件统计:
+            - 总文件数: ${summary.totalFiles}
+            - 已处理: ${summary.processedFiles}
+            
+            代码统计:
+            - 类: ${summary.totalClasses}
+            - 方法: ${summary.totalMethods}
+            - 关系: ${summary.totalEdges}
+            
+            性能:
+            - 索引耗时: ${summary.indexingTime / 1000.0} 秒
+            - 索引时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(summary.timestamp))}
+            """.trimIndent()
+        } else {
+            "暂无索引统计信息"
+        }
+        
+        JOptionPane.showMessageDialog(
+            mainPanel,
+            message,
+            "索引统计详情",
+            JOptionPane.INFORMATION_MESSAGE
+        )
+    }
+    
+    /**
+     * 验证配置
+     */
+    private fun validateConfiguration() {
+        val errors = mutableListOf<String>()
+        
+        // 检查AI供应商配置
+        val enabledCount = listOf(
+            settings.openAIConfig.enabled,
+            settings.anthropicConfig.enabled,
+            settings.googleConfig.enabled,
+            settings.ollamaConfig.enabled,
+            settings.azureOpenAIConfig.enabled
+        ).count { it }
+        
+        if (enabledCount == 0) {
+            errors.add("至少需要启用一个AI供应商")
+        }
+        
+        // 检查API Key
+        if (settings.openAIConfig.enabled && settings.openAIConfig.apiKey.isBlank()) {
+            errors.add("OpenAI API Key未配置")
+        }
+        if (settings.anthropicConfig.enabled && settings.anthropicConfig.apiKey.isBlank()) {
+            errors.add("Anthropic API Key未配置")
+        }
+        
+        // 检查Neo4j配置
+        if (settings.neo4jConfig.enabled) {
+            if (settings.neo4jConfig.username.isBlank()) {
+                errors.add("Neo4j用户名未配置")
+            }
+            if (settings.neo4jConfig.password.isBlank()) {
+                errors.add("Neo4j密码未配置")
+            }
+        }
+        
+        val messageType = if (errors.isEmpty()) {
+            JOptionPane.INFORMATION_MESSAGE
+        } else {
+            JOptionPane.WARNING_MESSAGE
+        }
+        
+        val message = if (errors.isEmpty()) {
+            "配置验证通过！所有必需的配置项都已正确设置。"
+        } else {
+            "发现以下配置问题:\\n" + errors.joinToString("\\n- ", "- ")
+        }
+        
+        JOptionPane.showMessageDialog(
+            mainPanel,
+            message,
+            "配置验证结果",
+            messageType
+        )
+    }
+    
+    /**
+     * 手动同步知识图谱到Neo4j
+     */
+    private fun syncKnowledgeGraphToNeo4j() {
+        // 检查Neo4j是否配置和可用
+        if (!settings.neo4jConfig.enabled) {
+            JOptionPane.showMessageDialog(
+                mainPanel,
+                "Neo4j数据库未启用，请先在设置中配置Neo4j连接。",
+                "同步失败",
+                JOptionPane.WARNING_MESSAGE
+            )
+            return
+        }
+        
+        // 检查项目是否已索引
+        val indexingStatus = indexingService.getIndexingStatus()
+        if (!indexingStatus.isIndexed) {
+            val result = JOptionPane.showConfirmDialog(
+                mainPanel,
+                "项目尚未索引或索引不完整。是否先进行项目索引？",
+                "需要索引",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            )
+            
+            if (result == JOptionPane.YES_OPTION) {
+                indexingService.startProjectIndexing(false)
+                return
+            } else {
+                return
+            }
+        }
+        
+        // 显示确认对话框
+        val confirmed = JOptionPane.showConfirmDialog(
+            mainPanel,
+            """
+            <html>
+            <h3>确认同步知识图谱</h3>
+            <p>此操作将：</p>
+            <ul>
+            <li>清空Neo4j数据库中的现有数据</li>
+            <li>将当前项目的所有类、方法和关系同步到Neo4j</li>
+            <li>可能需要较长时间，请耐心等待</li>
+            </ul>
+            <p><b>是否继续？</b></p>
+            </html>
+            """.trimIndent(),
+            "确认同步",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.QUESTION_MESSAGE
+        ) == JOptionPane.YES_OPTION
+        
+        if (!confirmed) return
+        
+        // 在后台执行同步
+        Thread {
+            SwingUtilities.invokeLater {
+                // 显示进度对话框
+                val progressDialog = createSyncProgressDialog()
+                progressDialog.isVisible = true
+                
+                try {
+                    // 获取代码图谱数据
+                    val psiService = com.vyibc.autocr.psi.PSIService.getInstance(project)
+                    val codeGraph = psiService.getCodeGraph()
+                    
+                    // 执行同步
+                    val result = neo4jService.syncCodeGraphToNeo4j(codeGraph)
+                    
+                    SwingUtilities.invokeLater {
+                        progressDialog.dispose()
+                        
+                        val messageType = if (result.success) {
+                            JOptionPane.INFORMATION_MESSAGE
+                        } else {
+                            JOptionPane.ERROR_MESSAGE
+                        }
+                        
+                        val message = if (result.success) {
+                            """
+                            <html>
+                            <h3>同步完成！</h3>
+                            <p><b>同步结果：</b></p>
+                            <ul>
+                            <li>节点数量: ${result.syncedNodes}</li>
+                            <li>关系数量: ${result.syncedEdges}</li>
+                            <li>耗时: ${result.duration}ms</li>
+                            </ul>
+                            <p>您现在可以在Neo4j Browser中查看知识图谱。</p>
+                            </html>
+                            """.trimIndent()
+                        } else {
+                            """
+                            <html>
+                            <h3>同步失败</h3>
+                            <p><b>错误信息：</b>${result.message}</p>
+                            <p>请检查Neo4j配置和连接状态。</p>
+                            </html>
+                            """.trimIndent()
+                        }
+                        
+                        JOptionPane.showMessageDialog(
+                            mainPanel,
+                            message,
+                            "同步结果",
+                            messageType
+                        )
+                        
+                        // 刷新Neo4j状态
+                        updateNeo4jStatus()
+                    }
+                    
+                } catch (e: Exception) {
+                    SwingUtilities.invokeLater {
+                        progressDialog.dispose()
+                        
+                        JOptionPane.showMessageDialog(
+                            mainPanel,
+                            """
+                            <html>
+                            <h3>同步过程中发生错误</h3>
+                            <p><b>错误详情：</b></p>
+                            <p>${e.message}</p>
+                            </html>
+                            """.trimIndent(),
+                            "同步错误",
+                            JOptionPane.ERROR_MESSAGE
+                        )
+                    }
+                }
+            }
+        }.start()
+    }
+    
+    /**
+     * 创建同步进度对话框
+     */
+    private fun createSyncProgressDialog(): JDialog {
+        val dialog = JDialog()
+        dialog.title = "正在同步到Neo4j..."
+        dialog.isModal = true
+        dialog.setSize(400, 150)
+        dialog.setLocationRelativeTo(mainPanel)
+        dialog.defaultCloseOperation = JDialog.DO_NOTHING_ON_CLOSE
+        
+        val contentPanel = JPanel()
+        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+        contentPanel.border = BorderFactory.createEmptyBorder(20, 20, 20, 20)
+        
+        val messageLabel = JBLabel("<html><h3>正在同步知识图谱到Neo4j数据库...</h3></html>")
+        messageLabel.alignmentX = java.awt.Component.CENTER_ALIGNMENT
+        
+        val progressBar = JProgressBar()
+        progressBar.isIndeterminate = true
+        progressBar.alignmentX = java.awt.Component.CENTER_ALIGNMENT
+        
+        val tipLabel = JBLabel("请稍候，这可能需要几分钟时间...")
+        tipLabel.alignmentX = java.awt.Component.CENTER_ALIGNMENT
+        
+        contentPanel.add(messageLabel)
+        contentPanel.add(Box.createVerticalStrut(15))
+        contentPanel.add(progressBar)
+        contentPanel.add(Box.createVerticalStrut(10))
+        contentPanel.add(tipLabel)
+        
+        dialog.add(contentPanel)
+        return dialog
+    }
+    
+    /**
+     * 打开设置
+     */
+    private fun openSettings() {
+        com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+            .showSettingsDialog(project, "AutoCR")
+    }
+    
+    fun dispose() {
+        refreshTimer.stop()
+    }
+}

@@ -1,0 +1,91 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.vyibc.AutoCR</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+    <name>AutoCR - AI Code Review</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://www.vyibc.com">VYIBC</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+    <description><![CDATA[
+    AI-powered code review plugin for IntelliJ IDEA.
+    <br>
+    Features:
+    <ul>
+      <li>Automated code review using AI</li>
+      <li>Git diff analysis</li>
+      <li>Risk and intent detection</li>
+    </ul>
+  ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>Git4Idea</depends>
+
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Services -->
+        <projectService serviceImplementation="com.vyibc.autocr.git.GitDiffService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.cache.CacheService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.psi.PSIService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.ai.MultiAIAdapterService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.service.AutoCRService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.settings.AutoCRSettingsState"/>
+        <projectService serviceImplementation="com.vyibc.autocr.indexing.ProjectIndexingService"/>
+        <projectService serviceImplementation="com.vyibc.autocr.neo4j.Neo4jService"/>
+        
+        <!-- Tool Windows -->
+        <toolWindow id="AutoCR" 
+                   factoryClass="com.vyibc.autocr.ui.AutoCRToolWindowFactory" 
+                   anchor="bottom" 
+                   icon="/icons/autocr.svg"/>
+        
+        <toolWindow id="AutoCR-Status" 
+                   factoryClass="com.vyibc.autocr.ui.AutoCRStatusToolWindowFactory" 
+                   anchor="right" 
+                   icon="/icons/autocr.svg"/>
+        
+        <!-- Settings Configuration -->
+        <projectConfigurable groupId="tools" 
+                           instance="com.vyibc.autocr.settings.AutoCRSettingsConfigurable"
+                           id="AutoCR.Settings"
+                           displayName="AutoCR"/>
+        
+        <!-- Notification Group -->
+        <notificationGroup id="AutoCR" 
+                          displayType="BALLOON" 
+                          key="AutoCR Notifications"/>
+        
+        <!-- Project Startup Activity -->
+        <projectActivity implementation="com.vyibc.autocr.startup.AutoCRProjectStartupActivity"/>
+    </extensions>
+    
+    <actions>
+        <action id="AutoCR.StartReview" 
+                class="com.vyibc.autocr.action.StartCodeReviewAction" 
+                text="AutoCR - 开始代码评审"
+                description="启动AutoCR AI代码评审">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+        
+        <action id="AutoCR.SyncToNeo4j"
+                class="com.vyibc.autocr.action.SyncToNeo4jAction"
+                text="同步到Neo4j"
+                description="将项目知识图谱同步到Neo4j数据库">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt N"/>
+        </action>
+    </actions>
+</idea-plugin>

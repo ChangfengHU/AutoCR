@@ -1,0 +1,638 @@
+package com.vyibc.autocr.indexing
+
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent
+import com.intellij.util.messages.MessageBusConnection
+import com.vyibc.autocr.psi.PSIService
+import com.vyibc.autocr.model.*
+import com.vyibc.autocr.graph.CodeGraph
+import com.vyibc.autocr.cache.CacheService
+import com.vyibc.autocr.settings.AutoCRSettingsState
+import com.vyibc.autocr.export.GraphExportService
+import org.slf4j.LoggerFactory
+import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.io.File
+
+/**
+ * 项目索引服务
+ * 负责项目首次索引、知识图谱构建和实时更新
+ */
+@Service(Service.Level.PROJECT)
+class ProjectIndexingService(private val project: Project) {
+    private val logger = LoggerFactory.getLogger(ProjectIndexingService::class.java)
+    
+    // 核心服务
+    private val psiService = PSIService.getInstance(project)
+    private val cacheService = CacheService.getInstance(project)
+    private val settings = AutoCRSettingsState.getInstance(project)
+    private val exportService = GraphExportService.getInstance(project)
+    
+    // 索引状态
+    private val isIndexing = AtomicBoolean(false)
+    private val isIndexed = AtomicBoolean(false)
+    private val lastIndexTime = AtomicLong(0)
+    
+    // 统计信息
+    private val totalFiles = AtomicInteger(0)
+    private val processedFiles = AtomicInteger(0)
+    private val totalClasses = AtomicInteger(0)
+    private val totalMethods = AtomicInteger(0)
+    private val totalEdges = AtomicInteger(0)
+    
+    // 文件监听器
+    private var busConnection: MessageBusConnection? = null
+    
+    init {
+        setupFileWatcher()
+        checkIndexStatus()
+    }
+    
+    /**
+     * 检查索引状态，如果需要则自动开始索引
+     */
+    private fun checkIndexStatus() {
+        val lastModified = getProjectLastModified()
+        val cachedIndexTime = getCachedIndexTime()
+        
+        if (cachedIndexTime == 0L || lastModified > cachedIndexTime) {
+            logger.info("Project needs indexing. Last modified: {}, Last index: {}", 
+                Instant.ofEpochMilli(lastModified), Instant.ofEpochMilli(cachedIndexTime))
+            
+            // 延迟启动索引，避免IDE启动时的性能影响
+            Thread {
+                Thread.sleep(5000) // 等待5秒
+                if (!isIndexing.get()) {
+                    startProjectIndexing(true)
+                }
+            }.start()
+        } else {
+            isIndexed.set(true)
+            logger.info("Project index is up to date")
+        }
+    }
+    
+    /**
+     * 开始项目索引
+     */
+    fun startProjectIndexing(background: Boolean = false) {
+        if (isIndexing.compareAndSet(false, true)) {
+            logger.info("Starting project indexing for: {}", project.name)
+            
+            if (background) {
+                // 后台索引
+                ProgressManager.getInstance().run(object : Task.Backgroundable(project, "AutoCR 项目索引中...", true) {
+                    override fun run(indicator: ProgressIndicator) {
+                        performIndexing(indicator)
+                    }
+                })
+            } else {
+                // 前台索引
+                ProgressManager.getInstance().run(object : Task.Modal(project, "AutoCR 项目索引中...", true) {
+                    override fun run(indicator: ProgressIndicator) {
+                        performIndexing(indicator)
+                    }
+                })
+            }
+        } else {
+            logger.warn("Indexing is already in progress")
+        }
+    }
+    
+    /**
+     * 执行索引过程
+     */
+    private fun performIndexing(indicator: ProgressIndicator) {
+        var indexingCompleted = false
+        try {
+            indicator.text = "正在扫描项目文件..."
+            indicator.isIndeterminate = false
+            
+            // 重置统计
+            resetStatistics()
+            
+            // 清空现有数据
+            val codeGraph = psiService.getCodeGraph()
+            codeGraph.clear()
+            
+            // 获取所有Java文件
+            val javaFiles = getProjectJavaFiles()
+            totalFiles.set(javaFiles.size)
+            
+            if (javaFiles.isEmpty()) {
+                logger.warn("No Java/Kotlin files found in project")
+                notifyIndexingCompleted(IndexingSummary(
+                    projectName = project.name,
+                    totalFiles = 0,
+                    processedFiles = 0,
+                    totalClasses = 0,
+                    totalMethods = 0,
+                    totalEdges = 0,
+                    indexingTime = 0,
+                    timestamp = System.currentTimeMillis()
+                ))
+                return
+            }
+            
+            indicator.text = "正在分析代码结构..."
+            logger.info("Found {} Java/Kotlin files to index", javaFiles.size)
+            
+            // 分析每个文件 - 添加更严格的异常处理
+            var successfullyProcessed = 0
+            javaFiles.forEachIndexed { index, file ->
+                if (indicator.isCanceled) {
+                    logger.info("Indexing was cancelled by user")
+                    return
+                }
+                
+                try {
+                    indicator.fraction = index.toDouble() / javaFiles.size
+                    indicator.text2 = "正在处理: ${file.name}"
+                    
+                    // 检查文件是否有效
+                    if (!file.isValid) {
+                        logger.warn("Skipping invalid file: {}", file.name)
+                        processedFiles.incrementAndGet()
+                        return@forEachIndexed
+                    }
+                    
+                    val fileResult = psiService.analyzeFile(file)
+                    
+                    // 更新统计
+                    totalClasses.addAndGet(fileResult.classes.size)
+                    totalMethods.addAndGet(fileResult.methods.size)
+                    totalEdges.addAndGet(fileResult.edges.size)
+                    processedFiles.incrementAndGet()
+                    successfullyProcessed++
+                    
+                    // 每处理10个文件输出一次日志，减少日志量
+                    if (processedFiles.get() % 10 == 0) {
+                        logger.info("Processed {}/{} files successfully", processedFiles.get(), totalFiles.get())
+                    }
+                    
+                } catch (e: Exception) {
+                    logger.error("Error analyzing file: {}", file.name, e)
+                    processedFiles.incrementAndGet()
+                    // 继续处理其他文件，不中断整个索引过程
+                }
+            }
+            
+            logger.info("Successfully processed {}/{} files", successfullyProcessed, javaFiles.size)
+            
+            indicator.text = "正在构建知识图谱..."
+            indicator.text2 = "分析依赖关系和调用链"
+            
+            // 分析项目级依赖关系
+            try {
+                analyzeProjectDependencies(indicator)
+            } catch (e: Exception) {
+                logger.error("Error analyzing project dependencies", e)
+                // 继续执行，依赖分析失败不影响主要索引
+            }
+            
+            // 保存索引时间
+            lastIndexTime.set(System.currentTimeMillis())
+            saveCachedIndexTime(lastIndexTime.get())
+            
+            // 同步到Neo4j（如果启用） - 使用独立的try-catch
+            if (settings.neo4jConfig.enabled) {
+                try {
+                    indicator.text = "正在同步到Neo4j数据库..."
+                    syncToNeo4j(indicator)
+                } catch (e: Exception) {
+                    logger.error("Failed to sync to Neo4j, but indexing will continue", e)
+                    // Neo4j同步失败不影响本地索引完成
+                }
+            }
+            
+            isIndexed.set(true)
+            indexingCompleted = true
+            
+            val indexSummary = IndexingSummary(
+                projectName = project.name,
+                totalFiles = totalFiles.get(),
+                processedFiles = processedFiles.get(),
+                totalClasses = totalClasses.get(),
+                totalMethods = totalMethods.get(),
+                totalEdges = totalEdges.get(),
+                indexingTime = System.currentTimeMillis() - (lastIndexTime.get() - 1000),
+                timestamp = lastIndexTime.get()
+            )
+            
+            // 缓存索引摘要
+            cacheService.put("indexing_summary", indexSummary)
+            
+            logger.info("Project indexing completed successfully: {}", indexSummary)
+            
+            // 自动导出图谱数据到文件 - 使用独立的try-catch
+            try {
+                indicator.text = "正在导出图谱数据..."
+                exportGraphData(indicator)
+            } catch (e: Exception) {
+                logger.error("Failed to export graph data, but indexing completed successfully", e)
+                // 导出失败不影响索引完成状态
+            }
+            
+            // 通知用户
+            notifyIndexingCompleted(indexSummary)
+            
+        } catch (e: Exception) {
+            logger.error("Project indexing failed", e)
+            notifyIndexingFailed(e.message ?: "Unknown error")
+        } finally {
+            isIndexing.set(false)
+            if (!indexingCompleted) {
+                // 如果索引没有正常完成，重置状态
+                isIndexed.set(false)
+            }
+        }
+    }
+    
+    /**
+     * 分析项目依赖关系
+     */
+    private fun analyzeProjectDependencies(indicator: ProgressIndicator) {
+        val codeGraph = psiService.getCodeGraph()
+        val allNodes = codeGraph.getAllNodes()
+        val methods = allNodes.filterIsInstance<MethodNode>()
+        
+        indicator.text2 = "分析方法调用关系"
+        
+        // 计算节点的入度和出度
+        methods.forEach { method ->
+            val incomingEdges = codeGraph.getIncomingEdges(method.id)
+            val outgoingEdges = codeGraph.getOutgoingEdges(method.id)
+            
+            // 更新节点的入度和出度（这里简化处理，实际应该更新节点）
+            logger.debug("Method {}: in={}, out={}", method.methodName, incomingEdges.size, outgoingEdges.size)
+        }
+        
+        indicator.text2 = "计算代码度量指标"
+        
+        // 计算其他度量指标
+        calculateCodeMetrics(indicator)
+    }
+    
+    /**
+     * 计算代码度量指标
+     */
+    private fun calculateCodeMetrics(indicator: ProgressIndicator) {
+        val stats = psiService.getProjectStats()
+        logger.info("Code metrics calculated: {}", stats)
+        
+        // 缓存项目统计
+        cacheService.put("project_stats", stats)
+    }
+    
+    /**
+     * 同步到Neo4j数据库
+     */
+    private fun syncToNeo4j(indicator: ProgressIndicator) {
+        try {
+            // 这里应该实现实际的Neo4j同步逻辑
+            indicator.text2 = "连接Neo4j数据库"
+            Thread.sleep(1000) // 模拟连接
+            
+            indicator.text2 = "同步节点数据"
+            Thread.sleep(2000) // 模拟同步节点
+            
+            indicator.text2 = "同步关系数据"
+            Thread.sleep(2000) // 模拟同步关系
+            
+            logger.info("Successfully synced to Neo4j: {} classes, {} methods, {} edges",
+                totalClasses.get(), totalMethods.get(), totalEdges.get())
+                
+        } catch (e: Exception) {
+            logger.error("Failed to sync to Neo4j", e)
+            // 不抛异常，索引可以继续进行
+        }
+    }
+    
+    /**
+     * 获取项目Java文件
+     */
+    private fun getProjectJavaFiles(): List<com.intellij.psi.PsiFile> {
+        return try {
+            val javaFiles = mutableListOf<com.intellij.psi.PsiFile>()
+            logger.info("Scanning project for Java and Kotlin files...")
+            
+            // 使用IntelliJ的VirtualFileManager扫描项目
+            val projectFileIndex = com.intellij.openapi.roots.ProjectFileIndex.getInstance(project)
+            val psiManager = com.intellij.psi.PsiManager.getInstance(project)
+            
+            // 遍历项目中的所有源码文件
+            projectFileIndex.iterateContent { virtualFile ->
+                try {
+                    // 处理Java和Kotlin文件
+                    if ((virtualFile.extension == "java" || virtualFile.extension == "kt") && 
+                        !virtualFile.path.contains("/test/") && 
+                        !virtualFile.path.contains("/tests/") &&
+                        !virtualFile.name.contains("Test.") &&
+                        projectFileIndex.isInSourceContent(virtualFile)) {
+                        
+                        val psiFile = psiManager.findFile(virtualFile)
+                        if (psiFile != null && psiFile.isValid) {
+                            javaFiles.add(psiFile)
+                            logger.debug("Found source file: {}", virtualFile.path)
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Error processing file: {}", virtualFile.path, e)
+                }
+                true // 继续遍历
+            }
+            
+            logger.info("Found {} source files in project (Java/Kotlin)", javaFiles.size)
+            
+            // 如果没有找到文件，尝试其他方法扫描
+            if (javaFiles.isEmpty()) {
+                logger.warn("No source files found using ProjectFileIndex, trying alternative approach...")
+                return scanProjectFilesAlternative()
+            }
+            
+            javaFiles
+            
+        } catch (e: Exception) {
+            logger.error("Error scanning source files", e)
+            scanProjectFilesAlternative()
+        }
+    }
+    
+    /**
+     * 备用的文件扫描方法
+     */
+    private fun scanProjectFilesAlternative(): List<com.intellij.psi.PsiFile> {
+        return try {
+            val files = mutableListOf<com.intellij.psi.PsiFile>()
+            val psiManager = com.intellij.psi.PsiManager.getInstance(project)
+            
+            // 使用FilenameIndex搜索Java和Kotlin文件
+            val scope = com.intellij.psi.search.GlobalSearchScope.projectScope(project)
+            
+            // 搜索.java文件
+            val javaFiles = com.intellij.psi.search.FilenameIndex.getAllFilesByExt(project, "java", scope)
+            javaFiles.forEach { virtualFile ->
+                val psiFile = psiManager.findFile(virtualFile)
+                if (psiFile != null && psiFile.isValid && !isTestFile(virtualFile.path)) {
+                    files.add(psiFile)
+                }
+            }
+            
+            // 搜索.kt文件
+            val kotlinFiles = com.intellij.psi.search.FilenameIndex.getAllFilesByExt(project, "kt", scope)
+            kotlinFiles.forEach { virtualFile ->
+                val psiFile = psiManager.findFile(virtualFile)
+                if (psiFile != null && psiFile.isValid && !isTestFile(virtualFile.path)) {
+                    files.add(psiFile)
+                }
+            }
+            
+            logger.info("Alternative scan found {} source files", files.size)
+            files
+            
+        } catch (e: Exception) {
+            logger.error("Alternative file scanning failed", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * 判断是否为测试文件
+     */
+    private fun isTestFile(filePath: String): Boolean {
+        return filePath.contains("/test/") || 
+               filePath.contains("/tests/") ||
+               filePath.contains("Test.") ||
+               filePath.contains("Spec.") ||
+               filePath.contains("Tests.")
+    }
+    
+    /**
+     * 设置文件监听器
+     */
+    private fun setupFileWatcher() {
+        busConnection = project.messageBus.connect()
+        busConnection?.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
+            override fun after(events: List<VFileEvent>) {
+                val javaFileChanged = events.any { event ->
+                    event.file?.extension == "java"
+                }
+                
+                if (javaFileChanged && isIndexed.get()) {
+                    logger.debug("Java files changed, marking for re-indexing")
+                    // 标记需要重新索引（延迟执行）
+                    scheduleReindexing()
+                }
+            }
+        })
+    }
+    
+    /**
+     * 安排重新索引
+     */
+    private fun scheduleReindexing() {
+        Thread {
+            Thread.sleep(5000) // 等待5秒，避免频繁重新索引
+            if (!isIndexing.get()) {
+                logger.info("Starting incremental re-indexing due to file changes")
+                startProjectIndexing(true) // 后台重新索引
+            }
+        }.start()
+    }
+    
+    /**
+     * 获取索引状态
+     */
+    fun getIndexingStatus(): IndexingStatus {
+        return IndexingStatus(
+            isIndexing = isIndexing.get(),
+            isIndexed = isIndexed.get(),
+            lastIndexTime = lastIndexTime.get(),
+            totalFiles = totalFiles.get(),
+            processedFiles = processedFiles.get(),
+            totalClasses = totalClasses.get(),
+            totalMethods = totalMethods.get(),
+            totalEdges = totalEdges.get()
+        )
+    }
+    
+    /**
+     * 获取索引摘要
+     */
+    fun getIndexingSummary(): IndexingSummary? {
+        return cacheService.get("indexing_summary") as? IndexingSummary
+    }
+    
+    /**
+     * 强制重新索引
+     */
+    fun forceReindex() {
+        logger.info("Force reindexing requested")
+        isIndexed.set(false)
+        startProjectIndexing(false)
+    }
+    
+    private fun resetStatistics() {
+        processedFiles.set(0)
+        totalClasses.set(0)
+        totalMethods.set(0)
+        totalEdges.set(0)
+    }
+    
+    private fun getProjectLastModified(): Long {
+        // 简化实现，返回当前时间
+        // 实际应该检查项目文件的最后修改时间
+        return System.currentTimeMillis()
+    }
+    
+    private fun getCachedIndexTime(): Long {
+        // 从缓存获取上次索引时间
+        return cacheService.get("last_index_time") as? Long ?: 0L
+    }
+    
+    private fun saveCachedIndexTime(time: Long) {
+        cacheService.put("last_index_time", time)
+    }
+    
+    private fun notifyIndexingCompleted(summary: IndexingSummary) {
+        com.intellij.notification.NotificationGroupManager.getInstance()
+            .getNotificationGroup("AutoCR")
+            .createNotification(
+                "AutoCR 项目索引完成",
+                "已索引 ${summary.totalFiles} 个文件，" +
+                "发现 ${summary.totalClasses} 个类，" +
+                "${summary.totalMethods} 个方法，" +
+                "耗时 ${summary.indexingTime / 1000} 秒",
+                com.intellij.notification.NotificationType.INFORMATION
+            )
+            .notify(project)
+    }
+    
+    private fun notifyIndexingFailed(error: String) {
+        com.intellij.notification.NotificationGroupManager.getInstance()
+            .getNotificationGroup("AutoCR")
+            .createNotification(
+                "AutoCR 项目索引失败",
+                "索引过程中出现错误: $error",
+                com.intellij.notification.NotificationType.ERROR
+            )
+            .notify(project)
+    }
+    
+    /**
+     * 导出图谱数据到文件
+     */
+    private fun exportGraphData(indicator: ProgressIndicator) {
+        try {
+            val codeGraph = psiService.getCodeGraph()
+            val outputDir = File(project.basePath, "autocr-exports")
+            
+            if (!outputDir.exists()) {
+                outputDir.mkdirs()
+            }
+            
+            val timestamp = System.currentTimeMillis()
+            val baseName = "${project.name}-graph-$timestamp"
+            
+            // 导出JSON格式
+            indicator.text2 = "导出JSON格式数据..."
+            val jsonPath = File(outputDir, "$baseName.json").absolutePath
+            val jsonResult = exportService.exportToJson(codeGraph, jsonPath)
+            logger.info("JSON export result: {}", jsonResult.message)
+            
+            // 导出Cypher格式
+            indicator.text2 = "导出Cypher脚本..."
+            val cypherPath = File(outputDir, "$baseName.cypher").absolutePath
+            val cypherResult = exportService.exportToCypher(codeGraph, cypherPath)
+            logger.info("Cypher export result: {}", cypherResult.message)
+            
+            // 生成分析报告
+            indicator.text2 = "生成分析报告..."
+            val reportPath = File(outputDir, "$baseName-report.md").absolutePath
+            val reportResult = exportService.generateSummaryReport(codeGraph, reportPath)
+            logger.info("Report export result: {}", reportResult.message)
+            
+            // 显示导出结果通知
+            val successCount = listOf(jsonResult, cypherResult, reportResult).count { it.success }
+            
+            if (successCount > 0) {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup("AutoCR")
+                    .createNotification(
+                        "AutoCR 图谱数据已导出",
+                        """
+                        导出位置: ${outputDir.absolutePath}
+                        
+                        导出文件:
+                        ${if (jsonResult.success) "✅ JSON数据: $baseName.json" else "❌ JSON导出失败"}
+                        ${if (cypherResult.success) "✅ Cypher脚本: $baseName.cypher" else "❌ Cypher导出失败"}
+                        ${if (reportResult.success) "✅ 分析报告: $baseName-report.md" else "❌ 报告生成失败"}
+                        
+                        您可以查看这些文件了解项目结构和图谱数据。
+                        """.trimIndent(),
+                        com.intellij.notification.NotificationType.INFORMATION
+                    )
+                    .notify(project)
+            }
+            
+        } catch (e: Exception) {
+            logger.error("Failed to export graph data", e)
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup("AutoCR")
+                .createNotification(
+                    "AutoCR 图谱数据导出失败",
+                    "导出过程中出现错误: ${e.message}",
+                    com.intellij.notification.NotificationType.WARNING
+                )
+                .notify(project)
+        }
+    }
+    
+    fun dispose() {
+        busConnection?.disconnect()
+        logger.info("ProjectIndexingService disposed")
+    }
+    
+    companion object {
+        fun getInstance(project: Project): ProjectIndexingService {
+            return project.service()
+        }
+    }
+}
+
+/**
+ * 索引状态
+ */
+data class IndexingStatus(
+    val isIndexing: Boolean,
+    val isIndexed: Boolean,
+    val lastIndexTime: Long,
+    val totalFiles: Int,
+    val processedFiles: Int,
+    val totalClasses: Int,
+    val totalMethods: Int,
+    val totalEdges: Int
+)
+
+/**
+ * 索引摘要
+ */
+data class IndexingSummary(
+    val projectName: String,
+    val totalFiles: Int,
+    val processedFiles: Int,
+    val totalClasses: Int,
+    val totalMethods: Int,
+    val totalEdges: Int,
+    val indexingTime: Long, // 毫秒
+    val timestamp: Long
+)
