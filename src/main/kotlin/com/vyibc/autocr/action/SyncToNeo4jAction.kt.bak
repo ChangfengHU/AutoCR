@@ -24,8 +24,8 @@ class SyncToNeo4jAction : AnAction("同步到Neo4j", "将项目知识图谱同�
         val project = e.project ?: return
         
         val settings = AutoCRSettingsState.getInstance(project)
-        val indexingService = ProjectIndexingService.getInstance(project)
-        val neo4jService = Neo4jService.getInstance(project)
+        val indexingService = project.service<ProjectIndexingService>()
+        val neo4jService = project.service<Neo4jService>()
         
         // 检查Neo4j是否配置
         if (!settings.neo4jConfig.enabled) {
@@ -205,7 +205,7 @@ class SyncToNeo4jAction : AnAction("同步到Neo4j", "将项目知识图谱同�
         
         if (project != null) {
             val settings = AutoCRSettingsState.getInstance(project)
-            val indexingService = ProjectIndexingService.getInstance(project)
+            val indexingService = project.service<ProjectIndexingService>()
             
             // 根据状态更新按钮文本和图标
             when {

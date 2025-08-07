@@ -346,7 +346,7 @@ class MultiAIAdapterService(private val project: Project) {
      */
     private fun buildSecurityAnalysisPrompt(methods: List<MethodNode>): String {
         val methodInfos = methods.take(10).map { method ->
-            "- ${method.methodName}: ${method.signature} (${method.blockType})"
+            "- ${method.name}: ${method.signature} (${method.classId})"
         }.joinToString("\n")
         
         return """
@@ -372,9 +372,9 @@ class MultiAIAdapterService(private val project: Project) {
      * 构建性能分析提示
      */
     private fun buildPerformanceAnalysisPrompt(methods: List<MethodNode>): String {
-        val complexMethods = methods.filter { it.cyclomaticComplexity > 5 }.take(5)
+        val complexMethods = methods.filter { it.parameters.size > 3 || it.signature.length > 100 }.take(5)
         val methodInfos = complexMethods.map { method ->
-            "- ${method.methodName}: 复杂度=${method.cyclomaticComplexity}, 行数=${method.linesOfCode}"
+            "- ${method.name}: 参数数量=${method.parameters.size}, 签名长度=${method.signature.length}"
         }.joinToString("\n")
         
         return """

@@ -1,0 +1,303 @@
+package com.vyibc.autocr.action
+
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
+import com.intellij.openapi.project.Project
+import com.vyibc.autocr.indexing.ProjectIndexingService
+import com.vyibc.autocr.export.GraphExportService
+import com.vyibc.autocr.settings.AutoCRSettingsState
+import com.vyibc.autocr.psi.PSIService
+import org.slf4j.LoggerFactory
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import javax.swing.JOptionPane
+
+/**
+ * 生成知识图谱分析文件的Action
+ * 用于右键菜单快速导出项目知识图谱分析
+ */
+class GenerateKnowledgeGraphAnalysisAction : AnAction(
+    "生成知识图谱分析", 
+    "生成项目知识图谱分析文件", 
+    null
+) {
+    
+    private val logger = LoggerFactory.getLogger(GenerateKnowledgeGraphAnalysisAction::class.java)
+    
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        
+        val indexingService = project.service<ProjectIndexingService>()
+        val exportService = project.service<GraphExportService>()
+        val psiService = project.service<PSIService>()
+        
+        // 检查项目是否已索引
+        val indexingStatus = indexingService.getIndexingStatus()
+        
+        if (indexingStatus.isIndexing) {
+            JOptionPane.showMessageDialog(
+                null,
+                """
+                <html>
+                <h3>⏳ 项目正在索引中</h3>
+                <p>请等待当前索引完成后再生成知识图谱分析。</p>
+                <br>
+                <p><b>索引进度：</b></p>
+                <p>• 已处理文件: ${indexingStatus.processedFiles}/${indexingStatus.totalFiles}</p>
+                <p>• 发现类: ${indexingStatus.totalClasses}</p>
+                <p>• 发现方法: ${indexingStatus.totalMethods}</p>
+                </html>
+                """.trimIndent(),
+                "项目索引进行中",
+                JOptionPane.INFORMATION_MESSAGE
+            )
+            return
+        }
+        
+        if (!indexingStatus.isIndexed) {
+            val result = JOptionPane.showConfirmDialog(
+                null,
+                """
+                <html>
+                <h3>📋 项目尚未索引</h3>
+                <p>需要先进行项目索引才能生成知识图谱分析。</p>
+                <br>
+                <p><b>索引过程将：</b></p>
+                <ul>
+                <li>• 扫描所有源代码文件</li>
+                <li>• 构建类和方法的关系图谱</li>
+                <li>• 分析代码结构和依赖关系</li>
+                <li>• 计算复杂度和度量指标</li>
+                </ul>
+                <br>
+                <p>是否现在开始索引？</p>
+                </html>
+                """.trimIndent(),
+                "需要先索引项目",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            )
+            
+            if (result == JOptionPane.YES_OPTION) {
+                indexingService.startProjectIndexing(false)
+            }
+            return
+        }
+        
+        // 显示生成选项对话框
+        val options = arrayOf(
+            "完整分析 (JSON + Cypher + 报告)",
+            "仅生成分析报告",
+            "仅导出JSON数据",
+            "仅导出Cypher脚本"
+        )
+        
+        val choice = JOptionPane.showOptionDialog(
+            null,
+            """
+            <html>
+            <h3>📊 生成知识图谱分析</h3>
+            <p>请选择要生成的分析文件类型：</p>
+            <br>
+            <p><b>当前项目统计：</b></p>
+            <p>• 类数量: ${indexingStatus.totalClasses}</p>
+            <p>• 方法数量: ${indexingStatus.totalMethods}</p>
+            <p>• 关系数量: ${indexingStatus.totalEdges}</p>
+            <p>• 已索引文件: ${indexingStatus.processedFiles}</p>
+            <br>
+            <p>选择生成类型：</p>
+            </html>
+            """.trimIndent(),
+            "选择分析类型",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            options,
+            options[0]
+        )
+        
+        if (choice == -1) return // 用户取消
+        
+        // 使用进度条显示生成过程
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "正在生成知识图谱分析...", true) {
+            override fun run(indicator: ProgressIndicator) {
+                try {
+                    indicator.text = "正在准备导出数据..."
+                    indicator.fraction = 0.0
+                    
+                    // 获取代码图谱
+                    val codeGraph = psiService.getCodeGraph()
+                    
+                    // 创建输出目录
+                    val outputDir = File(project.basePath, "autocr-exports")
+                    if (!outputDir.exists()) {
+                        outputDir.mkdirs()
+                    }
+                    
+                    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+                    val baseName = "${project.name}-knowledge-graph-$timestamp"
+                    
+                    val results = mutableListOf<Pair<String, Boolean>>()
+                    
+                    when (choice) {
+                        0 -> { // 完整分析
+                            indicator.text = "正在导出JSON数据..."
+                            indicator.fraction = 0.2
+                            val jsonPath = File(outputDir, "$baseName.json").absolutePath
+                            val jsonResult = exportService.exportToJson(codeGraph, jsonPath)
+                            results.add("JSON数据" to jsonResult.success)
+                            
+                            indicator.text = "正在导出Cypher脚本..."
+                            indicator.fraction = 0.5
+                            val cypherPath = File(outputDir, "$baseName.cypher").absolutePath
+                            val cypherResult = exportService.exportToCypher(codeGraph, cypherPath)
+                            results.add("Cypher脚本" to cypherResult.success)
+                            
+                            indicator.text = "正在生成分析报告..."
+                            indicator.fraction = 0.8
+                            val reportPath = File(outputDir, "$baseName-analysis.md").absolutePath
+                            val reportResult = exportService.generateSummaryReport(codeGraph, reportPath)
+                            results.add("分析报告" to reportResult.success)
+                        }
+                        1 -> { // 仅分析报告
+                            indicator.text = "正在生成分析报告..."
+                            indicator.fraction = 0.5
+                            val reportPath = File(outputDir, "$baseName-analysis.md").absolutePath
+                            val reportResult = exportService.generateSummaryReport(codeGraph, reportPath)
+                            results.add("分析报告" to reportResult.success)
+                        }
+                        2 -> { // 仅JSON
+                            indicator.text = "正在导出JSON数据..."
+                            indicator.fraction = 0.5
+                            val jsonPath = File(outputDir, "$baseName.json").absolutePath
+                            val jsonResult = exportService.exportToJson(codeGraph, jsonPath)
+                            results.add("JSON数据" to jsonResult.success)
+                        }
+                        3 -> { // 仅Cypher
+                            indicator.text = "正在导出Cypher脚本..."
+                            indicator.fraction = 0.5
+                            val cypherPath = File(outputDir, "$baseName.cypher").absolutePath
+                            val cypherResult = exportService.exportToCypher(codeGraph, cypherPath)
+                            results.add("Cypher脚本" to cypherResult.success)
+                        }
+                    }
+                    
+                    indicator.text = "生成完成，正在整理文件..."
+                    indicator.fraction = 0.95
+                    
+                    // 等待一秒让用户看到完成状态
+                    Thread.sleep(1000)
+                    indicator.fraction = 1.0
+                    
+                    // 显示结果
+                    javax.swing.SwingUtilities.invokeLater {
+                        val successCount = results.count { it.second }
+                        val totalCount = results.size
+                        
+                        if (successCount > 0) {
+                            val resultText = results.map { (name, success) ->
+                                if (success) "✅ $name" else "❌ $name"
+                            }.joinToString("\n")
+                            
+                            val message = """
+                            <html>
+                            <h3>🎉 知识图谱分析已生成！</h3>
+                            <p><b>生成结果 ($successCount/$totalCount)：</b></p>
+                            <p style='font-family: monospace;'>
+                            $resultText
+                            </p>
+                            <br>
+                            <p><b>📁 输出目录：</b></p>
+                            <p style='font-family: monospace; color: #0066cc;'>${outputDir.absolutePath}</p>
+                            <br>
+                            <p><b>📊 统计信息：</b></p>
+                            <table>
+                            <tr><td>• 类节点：</td><td><b>${indexingStatus.totalClasses}</b></td></tr>
+                            <tr><td>• 方法节点：</td><td><b>${indexingStatus.totalMethods}</b></td></tr>
+                            <tr><td>• 关系边：</td><td><b>${indexingStatus.totalEdges}</b></td></tr>
+                            </table>
+                            <br>
+                            <p><i>💡 您可以使用这些文件进行代码分析、架构审查或导入到图数据库中。</i></p>
+                            </html>
+                            """.trimIndent()
+                            
+                            JOptionPane.showMessageDialog(
+                                null,
+                                message,
+                                "知识图谱分析生成成功",
+                                JOptionPane.INFORMATION_MESSAGE
+                            )
+                        } else {
+                            JOptionPane.showMessageDialog(
+                                null,
+                                """
+                                <html>
+                                <h3>❌ 生成失败</h3>
+                                <p>所有分析文件生成都失败了。</p>
+                                <p>请检查日志文件获取详细错误信息。</p>
+                                </html>
+                                """.trimIndent(),
+                                "生成失败",
+                                JOptionPane.ERROR_MESSAGE
+                            )
+                        }
+                    }
+                    
+                } catch (e: Exception) {
+                    logger.error("Failed to generate knowledge graph analysis", e)
+                    
+                    javax.swing.SwingUtilities.invokeLater {
+                        JOptionPane.showMessageDialog(
+                            null,
+                            """
+                            <html>
+                            <h3>💥 生成过程中发生错误</h3>
+                            <p><b>错误详情：</b></p>
+                            <p style='color: red;'>${e.message}</p>
+                            <br>
+                            <p>请检查日志文件获取更多信息。</p>
+                            </html>
+                            """.trimIndent(),
+                            "生成错误",
+                            JOptionPane.ERROR_MESSAGE
+                        )
+                    }
+                }
+            }
+        })
+    }
+    
+    override fun update(e: AnActionEvent) {
+        val project = e.project
+        e.presentation.isEnabledAndVisible = project != null
+        
+        if (project != null) {
+            val indexingService = project.service<ProjectIndexingService>()
+            val indexingStatus = indexingService.getIndexingStatus()
+            
+            // 根据索引状态更新按钮显示
+            when {
+                indexingStatus.isIndexing -> {
+                    e.presentation.text = "索引进行中..."
+                    e.presentation.description = "等待项目索引完成后可生成知识图谱分析"
+                    e.presentation.isEnabled = true // 仍然可以点击查看状态
+                }
+                !indexingStatus.isIndexed -> {
+                    e.presentation.text = "生成知识图谱分析"
+                    e.presentation.description = "需要先索引项目，然后生成知识图谱分析文件"
+                    e.presentation.isEnabled = true
+                }
+                else -> {
+                    e.presentation.text = "生成知识图谱分析"
+                    e.presentation.description = "导出项目知识图谱为JSON、Cypher脚本和分析报告"
+                    e.presentation.isEnabled = true
+                }
+            }
+        }
+    }
+}

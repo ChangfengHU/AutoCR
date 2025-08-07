@@ -1,5 +1,6 @@
 package com.vyibc.autocr.startup
 
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.vyibc.autocr.indexing.ProjectIndexingService
@@ -32,7 +33,7 @@ class AutoCRProjectStartupActivity : ProjectActivity {
             // 自动启动索引（如果配置了）
             if (settings.generalSettings.autoStartReview) {
                 logger.info("Auto-starting project indexing")
-                val indexingService = ProjectIndexingService.getInstance(project)
+                val indexingService = project.service<ProjectIndexingService>()
                 indexingService.startProjectIndexing(true) // 后台索引
             }
             
@@ -65,7 +66,7 @@ class AutoCRProjectStartupActivity : ProjectActivity {
                 })
                 .addAction(object : com.intellij.openapi.actionSystem.AnAction("开始索引") {
                     override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
-                        ProjectIndexingService.getInstance(project).startProjectIndexing()
+                        project.service<ProjectIndexingService>().startProjectIndexing()
                     }
                 })
                 .notify(project)
@@ -114,7 +115,7 @@ class AutoCRProjectStartupActivity : ProjectActivity {
      * 检查是否是首次使用
      */
     private fun isFirstTimeUser(project: Project): Boolean {
-        val cacheService = com.vyibc.autocr.cache.CacheService.getInstance(project)
+        val cacheService = project.service<com.vyibc.autocr.cache.CacheService>()
         return cacheService.get("welcome_shown") == null
     }
     
@@ -122,7 +123,7 @@ class AutoCRProjectStartupActivity : ProjectActivity {
      * 标记欢迎信息已显示
      */
     private fun markWelcomeShown(project: Project) {
-        val cacheService = com.vyibc.autocr.cache.CacheService.getInstance(project)
+        val cacheService = project.service<com.vyibc.autocr.cache.CacheService>()
         cacheService.put("welcome_shown", true)
     }
 }

@@ -22,6 +22,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 /**
  * 项目索引服务
@@ -51,6 +56,15 @@ class ProjectIndexingService(private val project: Project) {
     
     // 文件监听器
     private var busConnection: MessageBusConnection? = null
+    
+    // 内存优化配置
+    companion object {
+        private const val BATCH_SIZE = 20 // 每批处理的文件数量
+        private const val MAX_CONCURRENT_THREADS = 2 // 最大并发线程数
+        private const val MEMORY_CHECK_INTERVAL = 10 // 每处理多少个文件检查一次内存
+        private const val MIN_FREE_MEMORY_MB = 100 // 最小剩余内存(MB)
+        private const val MAX_HEAP_USAGE_PERCENT = 80 // 最大堆使用率(%)
+    }
     
     init {
         setupFileWatcher()
@@ -146,43 +160,73 @@ class ProjectIndexingService(private val project: Project) {
             indicator.text = "正在分析代码结构..."
             logger.info("Found {} Java/Kotlin files to index", javaFiles.size)
             
-            // 分析每个文件 - 添加更严格的异常处理
+            // 分批处理文件以优化内存使用
             var successfullyProcessed = 0
-            javaFiles.forEachIndexed { index, file ->
+            val batches = javaFiles.chunked(BATCH_SIZE)
+            
+            logger.info("Processing {} files in {} batches (batch size: {})", javaFiles.size, batches.size, BATCH_SIZE)
+            
+            for ((batchIndex, batch) in batches.withIndex()) {
                 if (indicator.isCanceled) {
                     logger.info("Indexing was cancelled by user")
                     return
                 }
                 
+                // 内存检查
+                if (batchIndex % MEMORY_CHECK_INTERVAL == 0) {
+                    if (!checkMemoryAvailability()) {
+                        logger.warn("Low memory detected, performing garbage collection")
+                        System.gc()
+                        Thread.sleep(1000) // 等待GC完成
+                        
+                        if (!checkMemoryAvailability()) {
+                            logger.error("Insufficient memory to continue indexing")
+                            throw OutOfMemoryError("Insufficient memory for continued indexing")
+                        }
+                    }
+                }
+                
+                indicator.text = "正在处理第 ${batchIndex + 1}/${batches.size} 批文件..."
+                indicator.fraction = (batchIndex.toDouble() / batches.size) * 0.8 // 索引占80%进度
+                
+                // 并行处理当前批次的文件(限制并发数)
+                val executor = Executors.newFixedThreadPool(min(MAX_CONCURRENT_THREADS, batch.size)) as ThreadPoolExecutor
+                
                 try {
-                    indicator.fraction = index.toDouble() / javaFiles.size
-                    indicator.text2 = "正在处理: ${file.name}"
-                    
-                    // 检查文件是否有效
-                    if (!file.isValid) {
-                        logger.warn("Skipping invalid file: {}", file.name)
-                        processedFiles.incrementAndGet()
-                        return@forEachIndexed
+                    val futures = batch.mapIndexed { fileIndex, file ->
+                        CompletableFuture.supplyAsync({
+                            processFile(file, batchIndex * BATCH_SIZE + fileIndex, javaFiles.size, indicator)
+                        }, executor)
                     }
                     
-                    val fileResult = psiService.analyzeFile(file)
+                    // 等待批次完成
+                    val batchResults = futures.map { it.get(30, TimeUnit.SECONDS) }
+                    successfullyProcessed += batchResults.count { it }
                     
-                    // 更新统计
-                    totalClasses.addAndGet(fileResult.classes.size)
-                    totalMethods.addAndGet(fileResult.methods.size)
-                    totalEdges.addAndGet(fileResult.edges.size)
-                    processedFiles.incrementAndGet()
-                    successfullyProcessed++
-                    
-                    // 每处理10个文件输出一次日志，减少日志量
-                    if (processedFiles.get() % 10 == 0) {
-                        logger.info("Processed {}/{} files successfully", processedFiles.get(), totalFiles.get())
-                    }
+                    // 更新进度
+                    val currentProcessed = (batchIndex + 1) * BATCH_SIZE
+                    logger.info("Batch {}/{} completed. Processed {}/{} files successfully", 
+                        batchIndex + 1, batches.size, min(currentProcessed, javaFiles.size), javaFiles.size)
                     
                 } catch (e: Exception) {
-                    logger.error("Error analyzing file: {}", file.name, e)
-                    processedFiles.incrementAndGet()
-                    // 继续处理其他文件，不中断整个索引过程
+                    logger.error("Error processing batch {}", batchIndex + 1, e)
+                    // 继续下一批，不中断整个过程
+                } finally {
+                    // 关闭线程池
+                    executor.shutdown()
+                    try {
+                        if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                            executor.shutdownNow()
+                        }
+                    } catch (ex: InterruptedException) {
+                        executor.shutdownNow()
+                        Thread.currentThread().interrupt()
+                    }
+                }
+                
+                // 批次间短暂暂停，让系统回收资源
+                if (batchIndex < batches.size - 1) {
+                    Thread.sleep(100)
                 }
             }
             
@@ -597,15 +641,62 @@ class ProjectIndexingService(private val project: Project) {
         }
     }
     
+    /**
+     * 处理单个文件
+     */
+    private fun processFile(file: com.intellij.psi.PsiFile, index: Int, totalFiles: Int, indicator: ProgressIndicator): Boolean {
+        return try {
+            if (indicator.isCanceled) {
+                return false
+            }
+            
+            indicator.text2 = "[${index + 1}/$totalFiles] ${file.name}"
+            
+            // 检查文件是否有效
+            if (!file.isValid) {
+                logger.warn("Skipping invalid file: {}", file.name)
+                processedFiles.incrementAndGet()
+                return false
+            }
+            
+            val fileResult = psiService.analyzeFile(file)
+            
+            // 更新统计
+            totalClasses.addAndGet(fileResult.classes.size)
+            totalMethods.addAndGet(fileResult.methods.size)
+            totalEdges.addAndGet(fileResult.edges.size)
+            processedFiles.incrementAndGet()
+            
+            true
+            
+        } catch (e: Exception) {
+            logger.error("Error analyzing file: {}", file.name, e)
+            processedFiles.incrementAndGet()
+            false
+        }
+    }
+    
+    /**
+     * 检查内存可用性
+     */
+    private fun checkMemoryAvailability(): Boolean {
+        val runtime = Runtime.getRuntime()
+        val maxMemory = runtime.maxMemory()
+        val totalMemory = runtime.totalMemory()
+        val freeMemory = runtime.freeMemory()
+        val usedMemory = totalMemory - freeMemory
+        
+        val freeMemoryMB = (maxMemory - usedMemory) / 1024 / 1024
+        val heapUsagePercent = (usedMemory * 100) / maxMemory
+        
+        logger.debug("Memory status: Free={}MB, Heap Usage={}%", freeMemoryMB, heapUsagePercent)
+        
+        return freeMemoryMB >= MIN_FREE_MEMORY_MB && heapUsagePercent <= MAX_HEAP_USAGE_PERCENT
+    }
+    
     fun dispose() {
         busConnection?.disconnect()
         logger.info("ProjectIndexingService disposed")
-    }
-    
-    companion object {
-        fun getInstance(project: Project): ProjectIndexingService {
-            return project.service()
-        }
     }
 }
 

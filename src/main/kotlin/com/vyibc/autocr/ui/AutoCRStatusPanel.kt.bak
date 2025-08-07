@@ -1,5 +1,6 @@
 package com.vyibc.autocr.ui
 
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
@@ -38,8 +39,8 @@ class AutoCRStatusPanel(private val project: Project) {
     private val logger = LoggerFactory.getLogger(AutoCRStatusPanel::class.java)
     
     // 服务引用
-    private val indexingService = ProjectIndexingService.getInstance(project)
-    private val neo4jService = Neo4jService.getInstance(project)
+    private val indexingService = project.service<ProjectIndexingService>()
+    private val neo4jService = project.service<Neo4jService>()
     private val settings = AutoCRSettingsState.getInstance(project)
     
     // UI组件
