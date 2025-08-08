@@ -58,7 +58,7 @@ class KnowledgeGraphBuilder(private val project: Project) {
         return graph
     }
     
-    private fun collectProjectClasses(indicator: ProgressIndicator): List<PsiClass> {
+    private fun collectProjectClasses(@Suppress("UNUSED_PARAMETER") indicator: ProgressIndicator): List<PsiClass> {
         return ApplicationManager.getApplication().runReadAction<List<PsiClass>> {
             val classes = mutableListOf<PsiClass>()
             val scope = GlobalSearchScope.projectScope(project)
@@ -161,7 +161,7 @@ class KnowledgeGraphBuilder(private val project: Project) {
     private fun createMethodNode(method: PsiMethod, classId: String): MethodNode {
         val parameters = method.parameterList.parameters.map { param ->
             Parameter(
-                name = param.name ?: "",
+                name = param.name,
                 type = param.type.presentableText,
                 isVarArgs = param.isVarArgs
             )
@@ -190,7 +190,7 @@ class KnowledgeGraphBuilder(private val project: Project) {
     private fun createConstructorNode(constructor: PsiMethod, classId: String): MethodNode {
         val parameters = constructor.parameterList.parameters.map { param ->
             Parameter(
-                name = param.name ?: "",
+                name = param.name,
                 type = param.type.presentableText,
                 isVarArgs = param.isVarArgs
             )

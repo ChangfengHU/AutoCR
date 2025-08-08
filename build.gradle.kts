@@ -15,6 +15,9 @@ dependencies {
     // Logging
     implementation("org.slf4j:slf4j-api:2.0.13")
     
+    // Neo4j Driver for database connection testing
+    implementation("org.neo4j.driver:neo4j-java-driver:5.14.0")
+    
     // Apache TinkerPop for embedded graph database
     implementation("org.apache.tinkerpop:tinkergraph-gremlin:3.7.2")
     
