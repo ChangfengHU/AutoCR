@@ -189,7 +189,7 @@ class Neo4jCypherGenerator {
         }
     }
     
-    private fun addContainsRelationships(script: StringBuilder, graph: KnowledgeGraph) {
+    private fun addContainsRelationships(script: StringBuilder, @Suppress("UNUSED_PARAMETER") graph: KnowledgeGraph) {
         script.appendLine("// 创建包含关系 (Class)-[:CONTAINS]->(Method)")
         script.appendLine("MATCH (c:Class), (m:Method)")
         script.appendLine("WHERE c.id = m.classId")
