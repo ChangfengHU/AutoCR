@@ -257,6 +257,35 @@ class ImportToNeo4jAction : AnAction() {
                     val containsCounters = containsResult.consume().counters()
                     logger.info("创建了 ${containsCounters.relationshipsCreated()} 个包含关系")
                     
+                    // 创建实现关系
+                    logger.info("开始创建接口实现关系...")
+                    indicator.text = "正在创建接口实现关系..."
+                    indicator.fraction = 0.87
+                    
+                    val implementsQuery = """
+                        MATCH (impl:Class), (interface:Class)
+                        WHERE interface.qualifiedName IN impl.interfaces
+                        CREATE (impl)-[:IMPLEMENTS]->(interface)
+                    """.trimIndent()
+                    val implementsResult = session.run(implementsQuery)
+                    val implementsCounters = implementsResult.consume().counters()
+                    logger.info("创建了 ${implementsCounters.relationshipsCreated()} 个实现关系")
+                    
+                    // 创建继承关系
+                    logger.info("开始创建继承关系...")
+                    indicator.text = "正在创建继承关系..."
+                    indicator.fraction = 0.88
+                    
+                    val extendsQuery = """
+                        MATCH (child:Class), (parent:Class)
+                        WHERE child.superClass = parent.qualifiedName 
+                        AND child.superClass <> "java.lang.Object"
+                        CREATE (child)-[:EXTENDS]->(parent)
+                    """.trimIndent()
+                    val extendsResult = session.run(extendsQuery)
+                    val extendsCounters = extendsResult.consume().counters()
+                    logger.info("创建了 ${extendsCounters.relationshipsCreated()} 个继承关系")
+                    
                     // 创建调用关系
                     if (graph.edges.isNotEmpty()) {
                         logger.info("开始创建调用关系...")
@@ -305,9 +334,12 @@ class ImportToNeo4jAction : AnAction() {
                     
                     val classCount = session.run("MATCH (c:Class) RETURN count(c) as count").single().get("count").asInt()
                     val methodCount = session.run("MATCH (m:Method) RETURN count(m) as count").single().get("count").asInt()
-                    val relationCount = session.run("MATCH ()-[r:CALLS]->() RETURN count(r) as count").single().get("count").asInt()
+                    val callsCount = session.run("MATCH ()-[r:CALLS]->() RETURN count(r) as count").single().get("count").asInt()
+                    val containsCount = session.run("MATCH ()-[r:CONTAINS]->() RETURN count(r) as count").single().get("count").asInt()
+                    val implementsCount = session.run("MATCH ()-[r:IMPLEMENTS]->() RETURN count(r) as count").single().get("count").asInt()
+                    val extendsCount = session.run("MATCH ()-[r:EXTENDS]->() RETURN count(r) as count").single().get("count").asInt()
                     
-                    logger.info("导入验证完成：类 $classCount 个，方法 $methodCount 个，调用关系 $relationCount 个")
+                    logger.info("导入验证完成：类 $classCount 个，方法 $methodCount 个，调用关系 $callsCount 个，包含关系 $containsCount 个，实现关系 $implementsCount 个，继承关系 $extendsCount 个")
                     
                     indicator.text = "导入完成"
                     indicator.fraction = 1.0
@@ -315,7 +347,10 @@ class ImportToNeo4jAction : AnAction() {
                     val successMsg = "已成功导入到Neo4j:\n" +
                             "• 类: $classCount 个\n" +
                             "• 方法: $methodCount 个\n" +
-                            "• 调用关系: $relationCount 个\n" +
+                            "• 调用关系: $callsCount 个\n" +
+                            "• 包含关系: $containsCount 个\n" +
+                            "• 实现关系: $implementsCount 个\n" +
+                            "• 继承关系: $extendsCount 个\n" +
                             "• 数据库: ${settings.neo4jConfig.database.ifBlank { "默认" }}\n" +
                             "• 脚本已保存: $scriptFile"
                     

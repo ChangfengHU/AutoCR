@@ -27,7 +27,6 @@ class Neo4jPanel {
     fun createPanel(): JPanel {
         val mainPanel = JPanel(BorderLayout())
         mainPanel.border = JBUI.Borders.empty(16)
-        mainPanel.maximumSize = java.awt.Dimension(900, Int.MAX_VALUE)
 
         // 标题与启用开关（放在最上方）
         val headerRow = JPanel(java.awt.BorderLayout())
@@ -50,12 +49,30 @@ class Neo4jPanel {
         titlePanel.add(descLabel)
         titlePanel.add(Box.createVerticalStrut(12))
 
-        mainPanel.add(titlePanel, BorderLayout.NORTH)
-        
+        // 用内容面板承载标题与表单，顶端对齐，底部吃掉多余空间，避免顶部留白
+        val contentPanel = JPanel(GridBagLayout())
+        val c = GridBagConstraints()
+        c.gridx = 0
+        c.gridy = 0
+        c.fill = GridBagConstraints.HORIZONTAL
+        c.weightx = 1.0
+        contentPanel.add(titlePanel, c)
+
         // 创建配置表单
         val formPanel = createFormPanel()
-        formPanel.maximumSize = java.awt.Dimension(900, Int.MAX_VALUE)
-        mainPanel.add(formPanel, BorderLayout.CENTER)
+        c.gridy = 1
+        c.fill = GridBagConstraints.HORIZONTAL
+        c.weightx = 1.0
+        contentPanel.add(formPanel, c)
+
+        // 底部填充，吸收多余高度，保证内容从顶部开始
+        c.gridy = 2
+        c.fill = GridBagConstraints.BOTH
+        c.weightx = 1.0
+        c.weighty = 1.0
+        contentPanel.add(Box.createVerticalGlue(), c)
+
+        mainPanel.add(contentPanel, BorderLayout.CENTER)
         
         return mainPanel
     }
