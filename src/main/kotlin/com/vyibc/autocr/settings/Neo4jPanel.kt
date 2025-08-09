@@ -26,24 +26,35 @@ class Neo4jPanel {
     
     fun createPanel(): JPanel {
         val mainPanel = JPanel(BorderLayout())
-        mainPanel.border = JBUI.Borders.empty(20)
-        
-        // 创建标题
+        mainPanel.border = JBUI.Borders.empty(16)
+        mainPanel.maximumSize = java.awt.Dimension(900, Int.MAX_VALUE)
+
+        // 标题与启用开关（放在最上方）
+        val headerRow = JPanel(java.awt.BorderLayout())
+        val titleLabel = JBLabel("<html><h2 style='margin:0;'>Neo4j 数据库配置</h2></html>")
+        titleLabel.font = titleLabel.font.deriveFont(16f)
+
+        enabledCheckBox = JBCheckBox("启用Neo4j数据库")
+        enabledCheckBox.toolTipText = "启用后才能使用Neo4j相关功能"
+        enabledCheckBox.addActionListener { updateFieldsEnabled() }
+
+        headerRow.add(titleLabel, java.awt.BorderLayout.WEST)
+        headerRow.add(enabledCheckBox, java.awt.BorderLayout.EAST)
+
+        val descLabel = JBLabel("<html><div style='color:#666666;'>配置Neo4j数据库连接，用于存储和查询知识图谱数据。</div></html>")
+
         val titlePanel = JPanel()
         titlePanel.layout = BoxLayout(titlePanel, BoxLayout.Y_AXIS)
-        val titleLabel = JBLabel("<html><h2>Neo4j 数据库配置</h2></html>")
-        titleLabel.font = titleLabel.font.deriveFont(16f)
-        val descLabel = JBLabel("<html><p style='color: #666666;'>配置Neo4j数据库连接，用于存储和查询知识图谱数据。</p></html>")
-        
-        titlePanel.add(titleLabel)
-        titlePanel.add(Box.createVerticalStrut(5))
+        titlePanel.add(headerRow)
+        titlePanel.add(Box.createVerticalStrut(8))
         titlePanel.add(descLabel)
-        titlePanel.add(Box.createVerticalStrut(20))
-        
+        titlePanel.add(Box.createVerticalStrut(12))
+
         mainPanel.add(titlePanel, BorderLayout.NORTH)
         
         // 创建配置表单
         val formPanel = createFormPanel()
+        formPanel.maximumSize = java.awt.Dimension(900, Int.MAX_VALUE)
         mainPanel.add(formPanel, BorderLayout.CENTER)
         
         return mainPanel
@@ -58,16 +69,6 @@ class Neo4jPanel {
         gbc.anchor = GridBagConstraints.WEST
         
         var row = 0
-        
-        // 启用复选框
-        gbc.gridx = 0
-        gbc.gridy = row
-        gbc.gridwidth = 2
-        enabledCheckBox = JBCheckBox("启用Neo4j数据库")
-        enabledCheckBox.toolTipText = "启用后才能使用Neo4j相关功能"
-        enabledCheckBox.addActionListener { updateFieldsEnabled() }
-        panel.add(enabledCheckBox, gbc)
-        row++
         
         // URI
         gbc.gridx = 0
@@ -346,7 +347,7 @@ class Neo4jPanel {
         maxTransactionRetryTimeSpinner.value = settings.maxTransactionRetryTime.toInt()
         updateFieldsEnabled()
     }
-    
+
     fun applyTo(settings: Neo4jSettings) {
         settings.enabled = enabledCheckBox.isSelected
         settings.uri = uriField.text.trim()

@@ -18,6 +18,9 @@ class AutoCRSettingsState : PersistentStateComponent<AutoCRSettingsState> {
     // Neo4j配置
     var neo4jConfig = Neo4jSettings()
 
+    // AI供应商配置
+    var aiConfigs = mutableListOf<AIModelConfig>()
+    
     // 通用设置
     var generalSettings = GeneralSettings()
 
@@ -32,6 +35,36 @@ class AutoCRSettingsState : PersistentStateComponent<AutoCRSettingsState> {
             return project.service()
         }
     }
+}
+
+/**
+ * AI供应商类型
+ */
+enum class AIProvider(val displayName: String, val emoji: String) {
+    OPENAI("OpenAI", "🤖"),
+    ANTHROPIC("Anthropic", "🧠"),
+    GOOGLE("Google Gemini", "🌟"),
+    ALIBABA_TONGYI("阿里通义千问", "☁️"),
+    DEEPSEEK("DeepSeek", "🔍"),
+    OPENROUTER("OpenRouter", "🚀")
+}
+
+/**
+ * AI模型配置
+ */
+data class AIModelConfig(
+    var id: String = "",
+    var name: String = "",
+    var provider: AIProvider = AIProvider.OPENAI,
+    var modelName: String = "",
+    var apiKey: String = "",
+    var baseUrl: String = "",
+    var maxTokens: Int = 4000,
+    var temperature: Double = 0.1,
+    var timeout: Long = 30000L,
+    var enabled: Boolean = true
+) {
+    constructor() : this("", "", AIProvider.OPENAI, "", "", "", 4000, 0.1, 30000L, true)
 }
 
 /**

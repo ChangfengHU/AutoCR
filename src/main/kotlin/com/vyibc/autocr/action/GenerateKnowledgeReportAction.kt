@@ -23,7 +23,7 @@ import javax.swing.JOptionPane
 /**
  * 生成知识图谱扫描报告的Action
  */
-class GenerateKnowledgeReportAction : AnAction("生成知识图谱报告", "扫描项目并生成知识图谱分析报告", null) {
+class  GenerateKnowledgeReportAction : AnAction("生成知识图谱报告", "扫描项目并生成知识图谱分析报告", null) {
     
     private val logger = LoggerFactory.getLogger(GenerateKnowledgeReportAction::class.java)
     

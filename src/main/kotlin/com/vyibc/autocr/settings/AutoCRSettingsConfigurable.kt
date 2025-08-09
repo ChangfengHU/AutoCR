@@ -20,6 +20,9 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
 
     // Neo4j配置组件
     private lateinit var neo4jPanel: Neo4jPanel
+    
+    // AI配置组件
+    private lateinit var aiConfigPanel: AIConfigPanel
 
     private lateinit var mainPanel: JPanel
 
@@ -33,6 +36,10 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
         // Neo4j配置标签页
         neo4jPanel = Neo4jPanel()
         tabbedPane.addTab("Neo4j 数据库", neo4jPanel.createPanel())
+        
+        // AI配置标签页
+        aiConfigPanel = AIConfigPanel()
+        tabbedPane.addTab("AI 模型配置", aiConfigPanel.createPanel())
 
         mainPanel.add(tabbedPane, BorderLayout.CENTER)
 
@@ -43,7 +50,8 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
     }
 
     override fun isModified(): Boolean {
-        return neo4jPanel.isModified(settings.neo4jConfig)
+        return neo4jPanel.isModified(settings.neo4jConfig) ||
+               aiConfigPanel.isModified(settings.aiConfigs)
     }
 
     override fun apply() {
@@ -62,8 +70,12 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
 
         // 应用设置
         neo4jPanel.applyTo(settings.neo4jConfig)
+        
+        // 应用AI配置
+        settings.aiConfigs.clear()
+        settings.aiConfigs.addAll(aiConfigPanel.getConfigs())
 
-        logger.info("AutoCR Neo4j settings applied successfully")
+        logger.info("AutoCR settings (Neo4j + AI) applied successfully")
 
         // 通知用户设置已保存
         JOptionPane.showMessageDialog(
@@ -76,6 +88,7 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
 
     override fun reset() {
         neo4jPanel.loadFrom(settings.neo4jConfig)
+        aiConfigPanel.loadFrom(settings.aiConfigs)
     }
 
     /**
@@ -86,6 +99,9 @@ class AutoCRSettingsConfigurable(private val project: Project) : Configurable {
 
         // 验证Neo4j设置
         errors.addAll(SettingsValidator.validateNeo4jSettings(neo4jPanel.getCurrentSettings()))
+
+        // 验证AI配置（包含API Key有效性在线校验）
+        errors.addAll(aiConfigPanel.validateBeforeApply())
 
         return errors
     }

@@ -63,7 +63,7 @@
                            displayName="AutoCR"/>
         
         <!-- Notification Group -->
-        <notificationGroup id="AutoCR" 
+        <notificationGroup id="AutoCR.Notifications" 
                           displayType="BALLOON" 
                           key="AutoCR Notifications"/>
         
@@ -124,6 +124,25 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
+        </action>
+        
+        <action id="AutoCR.ImportToNeo4j"
+                class="com.vyibc.autocr.action.ImportToNeo4jAction"
+                text="导入知识图谱到Neo4j"
+                description="分析项目结构并直接导入到Neo4j数据库（支持覆盖）">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt I"/>
+        </action>
+        
+        <action id="AutoCR.TestNeo4jConnection"
+                class="com.vyibc.autocr.action.TestNeo4jConnectionAction"
+                text="测试Neo4j连接"
+                description="测试Neo4j数据库连接状态">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt T"/>
         </action>
     </actions>
 </idea-plugin>

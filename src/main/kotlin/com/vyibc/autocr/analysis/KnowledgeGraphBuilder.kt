@@ -114,6 +114,10 @@ class KnowledgeGraphBuilder(private val project: Project) {
     private fun analyzeCallRelations(graph: KnowledgeGraph, indicator: ProgressIndicator) {
         val methods = graph.methods
         val total = methods.size
+        var totalEdges = 0
+        var failedMethods = 0
+        
+        logger.info("开始分析 ${total} 个方法的调用关系...")
         
         methods.forEachIndexed { index, method ->
             if (indicator.isCanceled) return
@@ -126,13 +130,23 @@ class KnowledgeGraphBuilder(private val project: Project) {
                     val psiMethod = findPsiMethod(method)
                     if (psiMethod != null) {
                         val edges = callAnalyzer.analyzeMethodCalls(psiMethod, graph)
+                        if (edges.isNotEmpty()) {
+                            logger.debug("方法 ${method.name} 找到 ${edges.size} 个调用关系")
+                            totalEdges += edges.size
+                        }
                         edges.forEach { graph.addEdge(it) }
+                    } else {
+                        failedMethods++
+                        logger.debug("未找到PSI方法: ${method.id}")
                     }
                 } catch (e: Exception) {
                     logger.warn("Failed to analyze calls for method: ${method.name}", e)
+                    failedMethods++
                 }
             }
         }
+        
+        logger.info("调用关系分析完成：总边数 $totalEdges，失败方法数 $failedMethods")
     }
     
     private fun createClassBlock(psiClass: PsiClass): ClassBlock {
