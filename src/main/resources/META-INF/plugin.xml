@@ -144,5 +144,22 @@
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt T"/>
         </action>
+        
+        <action id="AutoCR.Neo4jQueryGenerator"
+                class="com.vyibc.autocr.action.Neo4jQueryGeneratorAction"
+                text="Neo4j查询生成器"
+                description="智能生成Neo4j Cypher查询语句，支持类和方法分析、调用链路查询等">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt Q"/>
+        </action>
+        
+        <!-- Neo4j右键菜单组 -->
+        <group id="AutoCR.Neo4jQueryMenu" 
+               class="com.vyibc.autocr.action.Neo4jQueryMenuGroup" 
+               text="🔍 Neo4j查询" 
+               description="为选中的类或方法生成Neo4j查询语句">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </group>
     </actions>
 </idea-plugin>
