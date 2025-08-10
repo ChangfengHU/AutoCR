@@ -106,6 +106,15 @@
         
         <!-- 保留我们的新功能 -->
         
+        <action id="AutoCR.StartCodeReview"
+                class="com.vyibc.autocr.action.StartCodeReviewAction"
+                text="🤖 AI代码评审"
+                description="启动智能代码评审分析">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+
         <action id="AutoCR.GenerateKnowledgeReport"
                 class="com.vyibc.autocr.action.GenerateKnowledgeReportAction"
                 text="生成知识图谱报告"
