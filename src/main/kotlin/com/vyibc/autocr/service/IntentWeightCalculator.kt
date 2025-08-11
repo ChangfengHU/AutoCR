@@ -13,33 +13,265 @@ class IntentWeightCalculator(private val neo4jQueryService: Neo4jQueryService) {
     private val logger = LoggerFactory.getLogger(IntentWeightCalculator::class.java)
     
     /**
-     * 计算调用路径的意图权重 - 以Neo4j图分析为核心
+     * 计算调用路径的意图权重 - 基于Neo4j图的上游连通性分析
+     * 核心思路：修改点的上游链路越多 = 影响的业务入口越多 = 业务权重越高
      * @param path 调用路径
-     * @param context Git差异上下文
+     * @param context Git差异上下文  
      * @return 意图权重 (0-100)
      */
-    fun calculateIntentWeight(path: CallPath, context: GitDiffContext): Double {
-        logger.debug("开始基于Neo4j图数据库计算路径 ${path.id} 的意图权重")
+    suspend fun calculateIntentWeight(path: CallPath, context: GitDiffContext): Double {
+        logger.debug("开始基于Neo4j图计算路径 ${path.id} 的业务意图权重")
         
-        // 核心：基于图数据库的分析 (80%)
-        val businessImpactFromGraph = calculateBusinessImpactFromGraph(path, context)
-        val architecturalValueFromGraph = calculateArchitecturalValueFromGraph(path)
-        val callChainCompletenessFromGraph = calculateCallChainCompletenessFromGraph(path)
+        try {
+            // 1. 获取修改点的所有方法节点
+            val methodNodes = extractMethodNodesFromPath(path)
+            
+            if (methodNodes.isEmpty()) {
+                logger.warn("路径 ${path.id} 没有找到具体的方法节点")
+                return 0.0
+            }
+            
+            // 2. 计算每个修改点的上游连通性（向上追踪业务入口）
+            var totalUpstreamConnectivity = 0.0
+            var totalBusinessImportance = 0.0
+            var totalCallFrequency = 0.0
+            
+            methodNodes.forEach { (className, methodName) ->
+                logger.info("🔍 开始计算方法意图权重: $className.$methodName")
+                
+                // 计算上游连通性：有多少业务入口会调用到这个修改点
+                val upstreamConnectivity = calculateUpstreamConnectivity(className, methodName)
+                totalUpstreamConnectivity += upstreamConnectivity
+                
+                // 计算业务重要性：该节点在业务流程中的重要程度
+                val businessImportance = calculateBusinessImportance(className, methodName)
+                totalBusinessImportance += businessImportance
+                
+                // 计算调用频次：通过该节点的调用链条密度
+                val callFrequency = calculateCallFrequency(className, methodName)
+                totalCallFrequency += callFrequency
+                
+                logger.debug("方法 $className.$methodName: 上游连通性=$upstreamConnectivity, 业务重要性=$businessImportance, 调用频次=$callFrequency")
+            }
+            
+            // 3. 加权平均计算最终业务权重
+            val avgUpstreamConnectivity = totalUpstreamConnectivity / methodNodes.size
+            val avgBusinessImportance = totalBusinessImportance / methodNodes.size  
+            val avgCallFrequency = totalCallFrequency / methodNodes.size
+            
+            // 权重公式：上游连通性40% + 业务重要性35% + 调用频次25%
+            val finalWeight = (avgUpstreamConnectivity * 0.4 + 
+                             avgBusinessImportance * 0.35 + 
+                             avgCallFrequency * 0.25).coerceIn(0.0, 100.0)
+            
+            logger.info("路径 ${path.id} 业务意图权重计算完成: $finalWeight")
+            logger.debug("  - 平均上游连通性: $avgUpstreamConnectivity")  
+            logger.debug("  - 平均业务重要性: $avgBusinessImportance")
+            logger.debug("  - 平均调用频次: $avgCallFrequency")
+            
+            return finalWeight
+            
+        } catch (e: Exception) {
+            logger.warn("计算路径 ${path.id} 业务意图权重失败: ${e.message}")
+            return calculateFallbackIntentWeight(path, context)
+        }
+    }
+    
+    /**
+     * 计算上游连通性：从当前节点向上遍历，统计能到达的业务入口数量
+     * 业务入口包括：Controller、API、定时任务、消息队列监听器等
+     */
+    private suspend fun calculateUpstreamConnectivity(className: String, methodName: String): Double {
+        try {
+            logger.info("📈 开始计算上游连通性: $className.$methodName")
+            
+            // 查询该方法的所有调用者（递归查询2-3层）
+            val callersInfo = neo4jQueryService.queryMethodCallers(className, methodName)
+            
+            logger.info("✅ 上游连通性查询完成: 发现${callersInfo.totalCallers}个调用者")
+            
+            var connectivityScore = 0.0
+            
+            // 1. 直接调用者权重
+            val directCallerScore = minOf(callersInfo.totalCallers * 8.0, 40.0) // 每个直接调用者8分，最高40分
+            connectivityScore += directCallerScore
+            
+            // 2. 业务入口层调用者加权（Controller、API等）
+            val businessEntryScore = callersInfo.callerDetails.sumOf { caller ->
+                when {
+                    caller.layer.contains("CONTROLLER", ignoreCase = true) -> 15.0
+                    caller.layer.contains("API", ignoreCase = true) -> 12.0
+                    caller.layer.contains("SCHEDULER", ignoreCase = true) -> 10.0
+                    caller.layer.contains("LISTENER", ignoreCase = true) -> 8.0
+                    caller.layer.contains("SERVICE", ignoreCase = true) -> 5.0
+                    else -> 2.0
+                }
+            }.coerceAtMost(35.0)
+            connectivityScore += businessEntryScore
+            
+            // 3. 跨层级调用链奖励（体现业务流程重要性）
+            val crossLayerScore = minOf(callersInfo.callerDetails.map { it.layer }.distinct().size * 5.0, 25.0)
+            connectivityScore += crossLayerScore
+            
+            logger.debug("$className.$methodName 上游连通性: 直接调用者=$directCallerScore, 业务入口=$businessEntryScore, 跨层级=$crossLayerScore")
+            
+            return connectivityScore.coerceIn(0.0, 100.0)
+            
+        } catch (e: Exception) {
+            logger.debug("计算上游连通性失败: ${e.message}")
+            return 0.0
+        }
+    }
+    
+    /**
+     * 计算业务重要性：基于节点在业务流程中的位置和角色
+     */
+    private suspend fun calculateBusinessImportance(className: String, methodName: String): Double {
+        try {
+            val archInfo = neo4jQueryService.queryClassArchitecture(className)
+            
+            var importanceScore = 0.0
+            
+            // 1. 基于架构层级的重要性
+            val layerImportance = when (archInfo.layer) {
+                "CONTROLLER" -> 25.0  // 控制层：直接面向用户/API，重要性最高
+                "SERVICE" -> 35.0     // 服务层：业务逻辑核心，重要性很高
+                "REPOSITORY" -> 20.0  // 数据层：数据操作，重要性中等
+                "UTIL" -> 10.0        // 工具层：辅助功能，重要性较低
+                else -> 15.0
+            }
+            importanceScore += layerImportance
+            
+            // 2. 基于业务关键词的重要性加权
+            val businessKeywordScore = calculateBusinessKeywordImportance(className, methodName)
+            importanceScore += businessKeywordScore
+            
+            // 3. 基于依赖复杂度的重要性（依赖越多可能越重要）
+            val dependencyImportance = minOf(archInfo.dependencies.size * 3.0, 20.0)
+            importanceScore += dependencyImportance
+            
+            // 4. 基于接口实现的重要性（实现接口的类通常更重要）
+            val interfaceImportance = minOf(archInfo.interfaces.size * 8.0, 15.0)
+            importanceScore += interfaceImportance
+            
+            logger.debug("$className.$methodName 业务重要性: 层级=$layerImportance, 关键词=$businessKeywordScore, 依赖=$dependencyImportance, 接口=$interfaceImportance")
+            
+            return importanceScore.coerceIn(0.0, 100.0)
+            
+        } catch (e: Exception) {
+            logger.debug("计算业务重要性失败: ${e.message}")
+            return 0.0
+        }
+    }
+    
+    /**
+     * 计算调用频次：基于通过该节点的调用链条密度
+     */
+    private suspend fun calculateCallFrequency(className: String, methodName: String): Double {
+        try {
+            // 同时查询上游调用者和下游被调用者，计算调用链条的总密度
+            val callersInfo = neo4jQueryService.queryMethodCallers(className, methodName)
+            val calleesInfo = neo4jQueryService.queryMethodCallees(className, methodName)
+            
+            var frequencyScore = 0.0
+            
+            // 1. 上游调用频次贡献
+            val upstreamFrequency = callersInfo.callerDetails.sumOf { it.callCount }.toDouble().coerceAtMost(50.0)
+            frequencyScore += upstreamFrequency * 0.3
+            
+            // 2. 下游调用频次贡献  
+            val downstreamFrequency = calleesInfo.calleeDetails.sumOf { it.callCount }.toDouble().coerceAtMost(50.0)
+            frequencyScore += downstreamFrequency * 0.2
+            
+            // 3. 调用链条长度奖励（长链条意味着该节点是重要的中转站）
+            val chainLength = callersInfo.totalCallers + calleesInfo.totalCallees
+            val chainLengthScore = minOf(chainLength * 2.0, 30.0)
+            frequencyScore += chainLengthScore * 0.5
+            
+            logger.debug("$className.$methodName 调用频次: 上游=$upstreamFrequency, 下游=$downstreamFrequency, 链条长度=$chainLengthScore")
+            
+            return frequencyScore.coerceIn(0.0, 100.0)
+            
+        } catch (e: Exception) {
+            logger.debug("计算调用频次失败: ${e.message}")
+            return 0.0
+        }
+    }
+    
+    /**
+     * 基于业务关键词计算重要性得分
+     */
+    private fun calculateBusinessKeywordImportance(className: String, methodName: String): Double {
+        val fullName = "$className.$methodName".lowercase()
+        var score = 0.0
         
-        // 辅助：基于Git变更的分析 (20%)
-        val changeContextValue = calculateGitChangeValue(path, context)
+        // 核心业务关键词权重表
+        val coreBusinessKeywords = mapOf(
+            "user" to 8.0, "order" to 8.0, "payment" to 10.0, "transaction" to 10.0,
+            "auth" to 9.0, "login" to 7.0, "security" to 9.0, "account" to 6.0,
+            "product" to 6.0, "inventory" to 7.0, "checkout" to 8.0, "cart" to 5.0
+        )
         
-        // 权重分配：图数据库80%，Git变更20%
-        val graphWeight = (businessImpactFromGraph * 0.4 + architecturalValueFromGraph * 0.25 + callChainCompletenessFromGraph * 0.15) * 0.8
-        val gitWeight = changeContextValue * 0.2
-        val totalWeight = graphWeight + gitWeight
+        // 操作类型关键词权重表  
+        val operationKeywords = mapOf(
+            "create" to 6.0, "save" to 6.0, "update" to 7.0, "delete" to 8.0,
+            "process" to 7.0, "execute" to 6.0, "handle" to 5.0, "validate" to 6.0
+        )
         
-        logger.debug("路径 ${path.id} 意图权重计算:")
-        logger.debug("  - 图数据库分析 (80%): 业务影响=${"%.1f".format(businessImpactFromGraph)}, 架构价值=${"%.1f".format(architecturalValueFromGraph)}, 调用链完整性=${"%.1f".format(callChainCompletenessFromGraph)}")
-        logger.debug("  - Git变更分析 (20%): ${"%.1f".format(changeContextValue)}")
-        logger.debug("  - 最终权重: ${"%.1f".format(totalWeight)}")
+        coreBusinessKeywords.forEach { (keyword, weight) ->
+            if (fullName.contains(keyword)) score += weight
+        }
         
-        return totalWeight
+        operationKeywords.forEach { (keyword, weight) ->
+            if (fullName.contains(keyword)) score += weight
+        }
+        
+        return minOf(score, 25.0) // 最高25分
+    }
+    
+    /**
+     * 从调用路径中提取方法节点信息
+     */
+    private fun extractMethodNodesFromPath(path: CallPath): List<Pair<String, String>> {
+        val methodNodes = mutableListOf<Pair<String, String>>()
+        
+        path.methods.forEach { methodPath ->
+            if (methodPath.contains(".")) {
+                val className = methodPath.substringBeforeLast(".")
+                val methodName = methodPath.substringAfterLast(".")
+                if (className.isNotBlank() && methodName.isNotBlank()) {
+                    methodNodes.add(className to methodName)
+                }
+            }
+        }
+        
+        return methodNodes
+    }
+    
+    /**
+     * Fallback计算（当Neo4j查询失败时）
+     */
+    private fun calculateFallbackIntentWeight(path: CallPath, context: GitDiffContext): Double {
+        var score = 20.0 // 基础分
+        
+        // 基于路径描述的简单分析
+        val description = path.description.lowercase()
+        
+        // 业务关键词匹配
+        val businessKeywords = listOf("user", "order", "payment", "controller", "service", "transaction")
+        val matchCount = businessKeywords.count { description.contains(it) }
+        score += matchCount * 5.0
+        
+        // 变更规模考虑
+        val totalChanges = path.relatedChanges.sumOf { it.addedLines + it.deletedLines }
+        score += when {
+            totalChanges > 100 -> 15.0
+            totalChanges > 50 -> 10.0
+            totalChanges > 10 -> 5.0
+            else -> 2.0
+        }
+        
+        return score.coerceIn(0.0, 100.0)
     }
     
     /**

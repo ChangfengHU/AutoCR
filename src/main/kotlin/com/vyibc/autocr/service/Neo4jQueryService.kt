@@ -59,7 +59,7 @@ class Neo4jQueryService {
      * 查询方法的调用者数量和层级分布
      */
     fun queryMethodCallers(className: String, methodName: String): MethodCallersInfo {
-        logger.debug("查询方法调用者: $className.$methodName")
+        logger.info("🔍 查询方法调用者: $className.$methodName")
         
         val query = """
             MATCH (targetClass:Class)-[:CONTAINS]->(targetMethod:Method)
@@ -72,7 +72,7 @@ class Neo4jQueryService {
             ORDER BY callCount DESC
         """.trimIndent()
         
-        logger.debug("执行Neo4j查询: $query")
+        logger.info("📊 执行Neo4j Cypher查询：\n$query")
         
         return if (isConnected) {
             executeRealQuery(query) { records ->
@@ -85,14 +85,27 @@ class Neo4jQueryService {
                     )
                 }
                 
-                MethodCallersInfo(
+                val result = MethodCallersInfo(
                     totalCallers = callerDetails.size,
                     layerDistribution = callerDetails.groupingBy { it.layer }.eachCount(),
                     callerDetails = callerDetails,
                     query = query
                 )
+                
+                // 打印详细的查询结果
+                logger.info("✅ 查询结果: 发现${result.totalCallers}个调用者")
+                callerDetails.take(5).forEach { caller ->
+                    logger.info("   📞 ${caller.className}.${caller.methodName} [${caller.layer}] 调用${caller.callCount}次")
+                }
+                if (callerDetails.size > 5) {
+                    logger.info("   ... 还有${callerDetails.size - 5}个调用者")
+                }
+                logger.info("   📊 层级分布: ${result.layerDistribution}")
+                
+                result
             }
         } else {
+            logger.warn("⚠️  Neo4j未连接，使用增强模拟模式")
             // 增强模拟模式：基于类名和方法名提供更智能的模拟数据
             getEnhancedMockCallersInfo(className, methodName, query)
         }
@@ -102,7 +115,7 @@ class Neo4jQueryService {
      * 查询方法的被调用者数量和层级分布
      */
     fun queryMethodCallees(className: String, methodName: String): MethodCalleesInfo {
-        logger.debug("查询方法被调用者: $className.$methodName")
+        logger.info("🔍 查询方法被调用者: $className.$methodName")
         
         val query = """
             MATCH (sourceClass:Class)-[:CONTAINS]->(sourceMethod:Method)
@@ -115,7 +128,7 @@ class Neo4jQueryService {
             ORDER BY callCount DESC
         """.trimIndent()
         
-        logger.debug("执行Neo4j查询: $query")
+        logger.info("📊 执行Neo4j Cypher查询：\n$query")
         
         return if (isConnected) {
             executeRealQuery(query) { records ->
@@ -128,14 +141,27 @@ class Neo4jQueryService {
                     )
                 }
                 
-                MethodCalleesInfo(
+                val result = MethodCalleesInfo(
                     totalCallees = calleeDetails.size,
                     layerDistribution = calleeDetails.groupingBy { it.layer }.eachCount(),
                     calleeDetails = calleeDetails,
                     query = query
                 )
+                
+                // 打印详细的查询结果
+                logger.info("✅ 查询结果: 发现${result.totalCallees}个被调用者")
+                calleeDetails.take(5).forEach { callee ->
+                    logger.info("   📞 ${callee.className}.${callee.methodName} [${callee.layer}] 被调用${callee.callCount}次")
+                }
+                if (calleeDetails.size > 5) {
+                    logger.info("   ... 还有${calleeDetails.size - 5}个被调用者")
+                }
+                logger.info("   📊 层级分布: ${result.layerDistribution}")
+                
+                result
             }
         } else {
+            logger.warn("⚠️  Neo4j未连接，使用增强模拟模式")
             getEnhancedMockCalleesInfo(className, methodName, query)
         }
     }
@@ -144,7 +170,7 @@ class Neo4jQueryService {
      * 查询类的架构层级和依赖关系
      */
     fun queryClassArchitecture(className: String): ClassArchitectureInfo {
-        logger.debug("查询类架构信息: $className")
+        logger.info("🏗️  查询类架构信息: $className")
         
         val query = """
             MATCH (c:Class)
@@ -174,13 +200,13 @@ class Neo4jQueryService {
                    collect(DISTINCT dependency.layer) as dependencyLayers
         """.trimIndent()
         
-        logger.debug("执行Neo4j查询: $query")
+        logger.info("📊 执行Neo4j Cypher查询：\n$query")
         
         return if (isConnected) {
             executeRealQuery(query) { records ->
                 val record = records.firstOrNull()
                 if (record != null) {
-                    ClassArchitectureInfo(
+                    val result = ClassArchitectureInfo(
                         className = className,
                         layer = record.get("currentLayer").asString(determineLayerFromClassName(className)),
                         packageName = record.get("packageName").asString(extractPackageFromClassName(className)),
@@ -192,11 +218,26 @@ class Neo4jQueryService {
                         dependencyLayers = record.get("dependencyLayers").asList { it.asString() },
                         query = query
                     )
+                    
+                    // 打印详细的查询结果
+                    logger.info("✅ 查询结果: 类 $className 架构信息")
+                    logger.info("   📋 层级: ${result.layer}")
+                    logger.info("   📦 包名: ${result.packageName}")
+                    logger.info("   👨‍👩‍👧‍👦 继承: 父类${result.parents.size}个, 子类${result.children.size}个")
+                    logger.info("   🔌 接口: 实现${result.interfaces.size}个, 被实现${result.implementations.size}个")
+                    logger.info("   🔗 依赖: ${result.dependencies.size}个依赖, 涉及${result.dependencyLayers.distinct().size}个层级")
+                    if (result.dependencies.isNotEmpty()) {
+                        logger.info("   📊 依赖层级分布: ${result.dependencyLayers.distinct()}")
+                    }
+                    
+                    result
                 } else {
+                    logger.warn("⚠️  Neo4j中未找到类 $className，使用推断架构信息")
                     getEnhancedMockArchitectureInfo(className, query)
                 }
             }
         } else {
+            logger.warn("⚠️  Neo4j未连接，使用增强模拟模式")
             getEnhancedMockArchitectureInfo(className, query)
         }
     }
@@ -255,7 +296,7 @@ class Neo4jQueryService {
      * 查询类或方法的影响范围（爆炸半径）
      */
     fun queryBlastRadius(className: String, methodName: String? = null): BlastRadiusInfo {
-        logger.debug("查询爆炸半径: $className${methodName?.let { ".$it" } ?: ""}")
+        logger.info("💥 查询爆炸半径: $className${methodName?.let { ".$it" } ?: ""}")
         
         val query = if (methodName != null) {
             """
@@ -297,7 +338,7 @@ class Neo4jQueryService {
             """.trimIndent()
         }
         
-        logger.debug("执行Neo4j查询: $query")
+        logger.info("📊 执行Neo4j Cypher查询：\n$query")
         
         return if (isConnected) {
             executeRealQuery(query) { records ->
@@ -309,7 +350,7 @@ class Neo4jQueryService {
                     val indirectCallees = record.get("indirectCallees").asInt(0)
                     val affectedLayers = record.get("affectedLayers").asList { it.asString() }.filter { it.isNotBlank() }.distinct()
                     
-                    BlastRadiusInfo(
+                    val result = BlastRadiusInfo(
                         directCallers = directCallers,
                         indirectCallers = indirectCallers,
                         directCallees = directCallees,
@@ -318,11 +359,22 @@ class Neo4jQueryService {
                         totalAffectedClasses = directCallers + directCallees + indirectCallers + indirectCallees,
                         query = query
                     )
+                    
+                    // 打印详细的查询结果
+                    logger.info("✅ 查询结果: $className${methodName?.let { ".$it" } ?: ""} 爆炸半径分析")
+                    logger.info("   📈 直接影响: 调用者${directCallers}个, 被调用者${directCallees}个")
+                    logger.info("   📊 间接影响: 二度调用者${indirectCallers}个, 二度被调用者${indirectCallees}个")
+                    logger.info("   🎯 总影响范围: ${result.totalAffectedClasses}个类")
+                    logger.info("   🏗️  涉及层级: ${affectedLayers}")
+                    
+                    result
                 } else {
+                    logger.warn("⚠️  Neo4j中未找到爆炸半径数据，使用推断模式")
                     getEnhancedMockBlastRadius(className, methodName, query)
                 }
             }
         } else {
+            logger.warn("⚠️  Neo4j未连接，使用增强模拟模式")
             getEnhancedMockBlastRadius(className, methodName, query)
         }
     }
@@ -331,14 +383,38 @@ class Neo4jQueryService {
     
     private fun <T> executeRealQuery(query: String, resultProcessor: (List<Record>) -> T): T {
         return try {
-            driver?.session()?.use { session ->
-                val result = session.run(query)
-                val records = result.list()
-                logger.debug("Neo4j查询返回 ${records.size} 条记录")
+            val startTime = System.currentTimeMillis()
+            val result = driver?.session()?.use { session ->
+                val queryResult = session.run(query)
+                val records = queryResult.list()
+                val endTime = System.currentTimeMillis()
+                
+                logger.info("📋 Neo4j查询执行完成: ${records.size}条记录, 耗时${endTime - startTime}ms")
+                
+                // 如果有记录，显示前几条的关键字段
+                if (records.isNotEmpty()) {
+                    logger.info("📄 查询结果预览:")
+                    records.take(3).forEachIndexed { index, record ->
+                        val fields = record.keys().take(3).map { key ->
+                            try {
+                                "$key=${record.get(key).asObject()}"
+                            } catch (e: Exception) {
+                                "$key=[数据读取异常]"
+                            }
+                        }.joinToString(", ")
+                        logger.info("   ${index + 1}. $fields")
+                    }
+                    if (records.size > 3) {
+                        logger.info("   ... 还有${records.size - 3}条记录")
+                    }
+                }
+                
                 resultProcessor(records)
             } ?: throw IllegalStateException("Neo4j driver未初始化")
+            
+            result
         } catch (e: Exception) {
-            logger.error("Neo4j查询执行失败: ${e.message}", e)
+            logger.error("❌ Neo4j查询执行失败: ${e.message}", e)
             throw e
         }
     }

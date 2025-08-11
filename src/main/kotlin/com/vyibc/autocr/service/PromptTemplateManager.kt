@@ -278,19 +278,126 @@ ${riskPaths.joinToString("\n") { "- ${it.reason} (confidence: ${it.confidence})"
     }
     
     /**
-     * 格式化方法体信息
+     * 格式化方法体信息 - 包含实际的代码变更diff
      */
     private fun formatMethodBodies(methodBodies: List<MethodBodyContext>): String {
         return methodBodies.mapIndexed { index, method ->
+            val diffDetails = buildCodeDiffDetails(method)
             """
 Method ${index + 1}: ${method.signature}
 - File: ${method.filePath}
 - Change Type: ${method.changeType}
 - Complexity: ${method.complexity}
-- Added Lines: ${method.addedLines.size}
-- Deleted Lines: ${method.deletedLines.size}
+
+**Code Changes (Critical for Logic Analysis):**
+$diffDetails
             """.trimIndent()
         }.joinToString("\n\n")
+    }
+    
+    /**
+     * 构建具体的代码变更详情 - 这是AI能识别业务逻辑错误的关键
+     */
+    private fun buildCodeDiffDetails(method: MethodBodyContext): String {
+        val details = mutableListOf<String>()
+        
+        // 显示删除的行
+        if (method.deletedLines.isNotEmpty()) {
+            details.add("**REMOVED Lines:**")
+            method.deletedLines.take(10).forEach { line ->
+                details.add("- ${line.content.trim()}")
+            }
+        }
+        
+        // 显示添加的行  
+        if (method.addedLines.isNotEmpty()) {
+            details.add("**ADDED Lines:**")
+            method.addedLines.take(10).forEach { line ->
+                details.add("+ ${line.content.trim()}")
+            }
+        }
+        
+        // 特别标注关键逻辑变更
+        val criticalChanges = identifyCriticalLogicChanges(method)
+        if (criticalChanges.isNotEmpty()) {
+            details.add("**⚠️ CRITICAL LOGIC CHANGES DETECTED:**")
+            criticalChanges.forEach { change ->
+                details.add("🔥 $change")
+            }
+        }
+        
+        return if (details.isNotEmpty()) {
+            details.joinToString("\n")
+        } else {
+            "No specific code changes detected"
+        }
+    }
+    
+    /**
+     * 识别关键逻辑变更 - 专门检测可能的业务逻辑错误
+     */
+    private fun identifyCriticalLogicChanges(method: MethodBodyContext): List<String> {
+        val criticalChanges = mutableListOf<String>()
+        
+        val deletedContent = method.deletedLines.joinToString("\n") { it.content }
+        val addedContent = method.addedLines.joinToString("\n") { it.content }
+        
+        // 检测条件逻辑变更
+        val conditionPatterns = listOf(
+            Regex("""if\s*\([^)]+\)"""), // if条件
+            Regex("""while\s*\([^)]+\)"""), // while条件
+            Regex("""for\s*\([^)]+\)""")  // for条件
+        )
+        
+        conditionPatterns.forEach { pattern ->
+            val deletedMatches = pattern.findAll(deletedContent).map { it.value }.toList()
+            val addedMatches = pattern.findAll(addedContent).map { it.value }.toList()
+            
+            // 检测条件被简化为true/false
+            deletedMatches.forEach { deletedCondition ->
+                if (!addedMatches.any { it.contains(deletedCondition.substringAfter("(").substringBefore(")")) }) {
+                    addedMatches.forEach { addedCondition ->
+                        if (addedCondition.contains("(true)") || addedCondition.contains("(false)")) {
+                            criticalChanges.add("Condition logic changed: '$deletedCondition' -> '$addedCondition' - This may break business logic!")
+                        }
+                    }
+                }
+            }
+            
+            // 检测复杂条件被简化
+            if (deletedMatches.any { it.contains(">") || it.contains("<") || it.contains("==") || it.contains("!=") }) {
+                if (addedMatches.any { it.contains("(true)") || it.contains("(false)") }) {
+                    criticalChanges.add("Complex condition simplified to boolean constant - DANGEROUS CHANGE!")
+                }
+            }
+        }
+        
+        // 检测返回值变更
+        val returnPattern = Regex("""return\s+[^;]+""")
+        val deletedReturns = returnPattern.findAll(deletedContent).map { it.value }.toList()
+        val addedReturns = returnPattern.findAll(addedContent).map { it.value }.toList()
+        
+        if (deletedReturns.isNotEmpty() && addedReturns.isNotEmpty()) {
+            deletedReturns.zip(addedReturns).forEach { (deleted, added) ->
+                if (deleted != added) {
+                    criticalChanges.add("Return value changed: '$deleted' -> '$added'")
+                }
+            }
+        }
+        
+        // 检测异常处理变更
+        if (deletedContent.contains("try") && !addedContent.contains("try")) {
+            criticalChanges.add("Exception handling removed - may cause unhandled errors!")
+        }
+        
+        // 检测锁超时等关键业务逻辑
+        if (deletedContent.contains("timeout") || deletedContent.contains("Time")) {
+            if (addedContent.contains("true") && !addedContent.contains("timeout")) {
+                criticalChanges.add("Timeout logic may have been bypassed - critical for system stability!")
+            }
+        }
+        
+        return criticalChanges
     }
     
     /**
@@ -361,57 +468,83 @@ Be specific, objective, and focus on measurable benefits.
         logger.debug("构建风险缺陷分析提示词")
         
         return """
-# Role: Senior Quality Assurance Engineer & Security Expert
+# Role: Senior Quality Assurance Engineer & Logic Error Detective
 
 You are performing the second stage of a three-stage code review analysis: **Flaw Analysis (过)**
-Your focus is to identify and analyze **risks, defects, and potential problems** in this code change.
+Your focus is to identify **critical business logic errors, security flaws, and system risks**.
+
+## 🚨 CRITICAL PRIORITY: Logic Error Detection
+**MOST IMPORTANT**: Look for these HIGH-RISK patterns:
+1. **Conditional Logic Bypass**: `if(complex_condition)` changed to `if(true)` or `if(false)`
+2. **Timeout/Safety Logic Removal**: Timeout checks, bounds checking, or safety conditions removed
+3. **Authentication/Authorization Bypass**: Security checks simplified or removed
+4. **Data Validation Bypass**: Input validation or business rule validation removed
+5. **Error Handling Removal**: Try-catch blocks or error checks removed
 
 ## Code Change Context
 ${formatRiskContext(context)}
 
-## Your Specific Tasks
+## Your Specific Analysis Tasks
 
-### 1. Technical Risk Assessment
-Identify potential technical issues:
-- Code quality problems
+### 🔥 1. CRITICAL Logic Error Detection (Priority 1)
+**Examine each code change line-by-line for:**
+- Complex conditions simplified to boolean constants (if(x > y && z != null) → if(true))
+- Timeout or timing logic modifications (currentTime > endTime → true)
+- Security or validation logic bypassed
+- Exception handling removed or weakened
+- Business rule enforcement removed
+
+### ⚠️ 2. Technical Risk Assessment
+Identify technical issues:
+- Code quality problems  
 - Performance bottlenecks
 - Memory leaks or resource issues
-- Error handling gaps
+- Concurrency and thread safety issues
 
-### 2. Architectural Concerns
+### 🏗️ 3. Architectural Concerns
 Evaluate architectural risks:
 - Design pattern violations
 - Coupling/cohesion issues
 - Layer violation risks
 - Scalability limitations
 
-### 3. Security & Reliability Analysis
+### 🔐 4. Security & Reliability Analysis
 Assess security and reliability risks:
 - Security vulnerabilities
 - Data integrity risks
-- Failure scenarios
-- Recovery mechanisms
+- Failure scenarios and error propagation
+- Recovery mechanisms compromised
 
-## Output Requirements
+## Required Output Format
 
-Provide a structured analysis focusing ONLY on risks, problems, and potential issues:
+**CRITICAL LOGIC ERRORS (Must be first if found):**
+- Error 1: [Specific logic bypass detected] (Severity: CRITICAL, Impact: [Business consequence])
+- Error 2: [Another critical issue] (Severity: HIGH, Impact: [System impact])
 
 **IDENTIFIED FLAWS:**
-- Flaw 1: [Description] (Severity: HIGH/MEDIUM/LOW, Category: ARCHITECTURE/PERFORMANCE/SECURITY)
-- Flaw 2: [Description] (Severity: HIGH/MEDIUM/LOW, Category: ARCHITECTURE/PERFORMANCE/SECURITY)
-- Flaw 3: [Description] (Severity: HIGH/MEDIUM/LOW, Category: ARCHITECTURE/PERFORMANCE/SECURITY)
+- Flaw 1: [Description] (Severity: HIGH/MEDIUM/LOW, Category: LOGIC/ARCHITECTURE/PERFORMANCE/SECURITY)
+- Flaw 2: [Description] (Severity: HIGH/MEDIUM/LOW, Category: LOGIC/ARCHITECTURE/PERFORMANCE/SECURITY)
 
 **OVERALL RISK LEVEL:** [CRITICAL/HIGH/MEDIUM/LOW]
 
 **CRITICAL ISSUE COUNT:** X
 
+**IMMEDIATE ACTION REQUIRED:**
+- [Specific fixes needed before merge]
+
 **ARCHITECTURAL CONCERNS:**
 - [Specific architectural risks]
 
-**IMMEDIATE RECOMMENDATIONS:**
-- [Urgent fixes needed]
+**SECURITY RISKS:**
+- [Security vulnerabilities identified]
 
-Be thorough, specific, and prioritize issues by severity and impact.
+## Special Instructions:
+- If you see ANY condition changed from complex logic to `true` or `false`, mark as CRITICAL
+- If timeout/timing logic is modified, investigate thoroughly for business logic errors
+- Priority: Logic errors > Security issues > Performance issues > Code quality
+- Be specific about the exact line changes that cause risks
+
+**Remember**: A single logic error like `if(timeout_check)` → `if(true)` can break entire systems!
         """.trimIndent()
     }
     

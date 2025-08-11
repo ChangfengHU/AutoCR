@@ -14,12 +14,20 @@ class RiskWeightCalculator(private val neo4jQueryService: Neo4jQueryService) {
     
     /**
      * 计算调用路径的风险权重 - 以Neo4j图分析为核心
+     * 新增：关键业务逻辑错误检测
      * @param path 调用路径
      * @param context Git差异上下文
      * @return 风险权重 (0-100)
      */
     fun calculateRiskWeight(path: CallPath, context: GitDiffContext): Double {
         logger.debug("开始基于Neo4j图数据库计算路径 ${path.id} 的风险权重")
+        
+        // 🚨 第一优先级：检查严重的业务逻辑错误
+        val criticalLogicError = detectCriticalLogicErrors(path, context)
+        if (criticalLogicError > 0) {
+            logger.error("⚠️ 检测到严重逻辑错误，路径 ${path.id} 风险权重设为极高: $criticalLogicError")
+            return criticalLogicError // 直接返回最高风险权重
+        }
         
         // 核心：基于图数据库的分析 (80%)
         val architecturalRiskFromGraph = calculateArchitecturalRiskFromGraph(path)
@@ -40,6 +48,228 @@ class RiskWeightCalculator(private val neo4jQueryService: Neo4jQueryService) {
         logger.debug("  - 最终权重: ${"%.1f".format(totalWeight)}")
         
         return totalWeight
+    }
+    
+    /**
+     * 🚨 检测严重的业务逻辑错误 - 新增关键功能
+     * 专门检测 if(currentNanoTime > endNanoTime) -> if(true) 等严重问题
+     */
+    private fun detectCriticalLogicErrors(path: CallPath, context: GitDiffContext): Double {
+        var errorScore = 0.0
+        
+        // 检查路径相关的所有文件变更
+        val relatedFiles = context.changedFiles.filter { file ->
+            path.methods.any { method ->
+                val className = method.substringBeforeLast(".", "")
+                if (className.isNotEmpty()) {
+                    file.path.contains(className, ignoreCase = true)
+                } else false
+            } || path.relatedChanges.contains(file)
+        }
+        
+        logger.debug("检测路径 ${path.id} 的逻辑错误，涉及 ${relatedFiles.size} 个文件")
+        
+        relatedFiles.forEach { file ->
+            file.hunks.forEach { hunk ->
+                val deletedLines = hunk.lines.filter { it.type == DiffLineType.DELETED }.map { it.content }
+                val addedLines = hunk.lines.filter { it.type == DiffLineType.ADDED }.map { it.content }
+                
+                // 1. 🔥 检测条件逻辑被简化为布尔常量的情况 (最高优先级)
+                val conditionBypassErrors = detectConditionLogicBypass(deletedLines, addedLines)
+                if (conditionBypassErrors.isNotEmpty()) {
+                    logger.error("🚨 发现严重条件逻辑绕过: $conditionBypassErrors")
+                    errorScore = maxOf(errorScore, 98.0) // 设为接近最高的风险
+                }
+                
+                // 2. ⏰ 检测超时/时间逻辑被破坏
+                val timeoutErrors = detectTimeoutLogicErrors(deletedLines, addedLines)
+                if (timeoutErrors.isNotEmpty()) {
+                    logger.error("⚠️ 发现超时逻辑错误: $timeoutErrors")
+                    errorScore = maxOf(errorScore, 95.0)
+                }
+                
+                // 3. 🔒 检测安全检查被绕过
+                val securityBypassErrors = detectSecurityBypass(deletedLines, addedLines)
+                if (securityBypassErrors.isNotEmpty()) {
+                    logger.error("🛡️ 发现安全检查被绕过: $securityBypassErrors")
+                    errorScore = maxOf(errorScore, 90.0)
+                }
+                
+                // 4. ❌ 检测异常处理被移除
+                if (detectExceptionHandlingRemoval(deletedLines, addedLines)) {
+                    logger.warn("⚠️ 发现异常处理被移除")
+                    errorScore = maxOf(errorScore, 85.0)
+                }
+                
+                // 5. 📊 检测业务规则验证被绕过
+                val businessRuleBypassErrors = detectBusinessRuleBypass(deletedLines, addedLines)
+                if (businessRuleBypassErrors.isNotEmpty()) {
+                    logger.warn("📊 发现业务规则绕过: $businessRuleBypassErrors")
+                    errorScore = maxOf(errorScore, 80.0)
+                }
+            }
+        }
+        
+        if (errorScore > 0) {
+            logger.error("路径 ${path.id} 检测到严重逻辑错误，风险等级: $errorScore")
+        }
+        
+        return errorScore
+    }
+    
+    /**
+     * 🔥 检测条件逻辑被绕过的情况 - 最关键的检测逻辑
+     * 专门检测用户提到的 if(currentNanoTime > endNanoTime) -> if(true) 问题
+     */
+    private fun detectConditionLogicBypass(deletedLines: List<String>, addedLines: List<String>): List<String> {
+        val bypasses = mutableListOf<String>()
+        
+        // 检测复杂条件 -> 简单布尔值的模式
+        val complexConditionPatterns = listOf(
+            Regex("""if\s*\([^)]*[><!=]+[^)]*\)"""), // if with comparison operators
+            Regex("""while\s*\([^)]*[><!=]+[^)]*\)"""), // while with comparison operators  
+            Regex("""if\s*\([^)]*&&[^)]*\)"""), // if with AND condition
+            Regex("""if\s*\([^)]*\|\|[^)]*\)"""), // if with OR condition
+            Regex("""if\s*\([^)]*\w+\s*[><!=]+\s*\w+[^)]*\)""") // general comparison pattern
+        )
+        
+        deletedLines.forEach { deletedLine ->
+            complexConditionPatterns.forEach { pattern ->
+                if (pattern.containsMatchIn(deletedLine.trim())) {
+                    // 在删除行中发现了复杂条件，检查对应的新增行
+                    addedLines.forEach { addedLine ->
+                        val cleanAddedLine = addedLine.trim()
+                        
+                        // 检测被简化为布尔常量
+                        if ((cleanAddedLine.contains("if (true)") || cleanAddedLine.contains("if(true)") ||
+                             cleanAddedLine.contains("if (false)") || cleanAddedLine.contains("if(false)")) &&
+                            !pattern.containsMatchIn(cleanAddedLine)) {
+                            
+                            bypasses.add("🔥 CRITICAL: 复杂条件被简化为布尔常量 - '$deletedLine' → '$addedLine'")
+                        }
+                        
+                        // 检测其他简化模式
+                        if (cleanAddedLine.contains("if (1)") || cleanAddedLine.contains("if(1)") ||
+                            cleanAddedLine.contains("if (0)") || cleanAddedLine.contains("if(0)")) {
+                            
+                            bypasses.add("🔥 CRITICAL: 条件逻辑被数字常量替代 - '$deletedLine' → '$addedLine'")
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 🎯 特殊检测：时间/超时比较逻辑被绕过（针对用户的具体问题）
+        deletedLines.forEach { deletedLine ->
+            val lowerDeleted = deletedLine.lowercase().trim()
+            if ((lowerDeleted.contains("time") && (lowerDeleted.contains(">") || lowerDeleted.contains("<"))) || 
+                (lowerDeleted.contains("timeout") && lowerDeleted.contains(">"))) {
+                
+                addedLines.forEach { addedLine ->
+                    val lowerAdded = addedLine.lowercase().trim()
+                    if ((lowerAdded.contains("if (true)") || lowerAdded.contains("if(true)")) &&
+                        !lowerAdded.contains("time")) {
+                        
+                        bypasses.add("🚨 EXTREMELY CRITICAL: 时间/超时检查被完全绕过 - '$deletedLine' → '$addedLine' - 这会破坏业务逻辑!")
+                    }
+                }
+            }
+        }
+        
+        return bypasses
+    }
+    
+    /**
+     * ⏰ 检测超时逻辑错误
+     */
+    private fun detectTimeoutLogicErrors(deletedLines: List<String>, addedLines: List<String>): List<String> {
+        val errors = mutableListOf<String>()
+        
+        val timeoutKeywords = listOf("timeout", "expire", "deadline", "duration", "nanotime", "currenttime")
+        
+        deletedLines.forEach { deleted ->
+            val lowerDeleted = deleted.lowercase()
+            if (timeoutKeywords.any { lowerDeleted.contains(it) } && 
+                (lowerDeleted.contains(">") || lowerDeleted.contains("<") || lowerDeleted.contains("=="))) {
+                
+                // 检查对应的新增行是否破坏了超时逻辑
+                addedLines.forEach { added ->
+                    val lowerAdded = added.lowercase()
+                    if (!timeoutKeywords.any { lowerAdded.contains(it) } &&
+                        (lowerAdded.contains("true") || lowerAdded.contains("false") || lowerAdded.contains("1") || lowerAdded.contains("0"))) {
+                        
+                        errors.add("⏰ 超时逻辑被硬编码替代: '$deleted' → '$added'")
+                    }
+                }
+            }
+        }
+        
+        return errors
+    }
+    
+    /**
+     * 🔒 检测安全检查绕过
+     */
+    private fun detectSecurityBypass(deletedLines: List<String>, addedLines: List<String>): List<String> {
+        val bypasses = mutableListOf<String>()
+        
+        val securityKeywords = listOf("auth", "permission", "validate", "check", "verify", "secure", "access", "role")
+        
+        deletedLines.forEach { deleted ->
+            val lowerDeleted = deleted.lowercase()
+            if (securityKeywords.any { lowerDeleted.contains(it) } && 
+                (lowerDeleted.contains("if") || lowerDeleted.contains("return"))) {
+                
+                addedLines.forEach { added ->
+                    val lowerAdded = added.lowercase()
+                    if ((lowerAdded.contains("true") || lowerAdded.contains("return true")) &&
+                        !securityKeywords.any { lowerAdded.contains(it) }) {
+                        
+                        bypasses.add("🔒 安全检查被绕过: '$deleted' → '$added'")
+                    }
+                }
+            }
+        }
+        
+        return bypasses
+    }
+    
+    /**
+     * ❌ 检测异常处理移除
+     */
+    private fun detectExceptionHandlingRemoval(deletedLines: List<String>, addedLines: List<String>): Boolean {
+        val hasTryInDeleted = deletedLines.any { it.trim().contains("try") || it.trim().contains("catch") }
+        val hasTryInAdded = addedLines.any { it.trim().contains("try") || it.trim().contains("catch") }
+        
+        return hasTryInDeleted && !hasTryInAdded
+    }
+    
+    /**
+     * 📊 检测业务规则验证被绕过
+     */
+    private fun detectBusinessRuleBypass(deletedLines: List<String>, addedLines: List<String>): List<String> {
+        val bypasses = mutableListOf<String>()
+        
+        val businessRuleKeywords = listOf("validate", "verify", "check", "ensure", "assert", "require")
+        
+        deletedLines.forEach { deleted ->
+            val lowerDeleted = deleted.lowercase()
+            if (businessRuleKeywords.any { lowerDeleted.contains(it) } && 
+                lowerDeleted.contains("if")) {
+                
+                // 检查是否有对应的简单替代
+                addedLines.forEach { added ->
+                    val lowerAdded = added.lowercase()
+                    if ((lowerAdded.contains("if (true)") || lowerAdded.contains("return")) &&
+                        !businessRuleKeywords.any { lowerAdded.contains(it) }) {
+                        
+                        bypasses.add("📊 业务规则验证被绕过: '$deleted' → '$added'")
+                    }
+                }
+            }
+        }
+        
+        return bypasses
     }
     
     /**

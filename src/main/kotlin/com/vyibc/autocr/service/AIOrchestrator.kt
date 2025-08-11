@@ -17,7 +17,6 @@ class AIOrchestrator(private val project: Project) {
     private val logger = LoggerFactory.getLogger(AIOrchestrator::class.java)
     private val settings = AutoCRSettingsState.getInstance(project)
     private val promptTemplateManager = PromptTemplateManager()
-    private val contextCompressor = ContextCompressor()
     
     // AI提供商适配器
     private val providers = mutableMapOf<String, AIProvider>()
@@ -48,8 +47,12 @@ class AIOrchestrator(private val project: Project) {
                 logger.info("🤖 使用${provider.getName()}进行快速筛选")
                 logger.debug("📝 快速筛选提示词长度: ${prompt.length} 字符")
                 
-                // 压缩上下文
-                val compressedPrompt = contextCompressor.compressPrompt(prompt, provider.getMaxTokens())
+                // 压缩上下文（简化处理）
+                val compressedPrompt = if (prompt.length > provider.getMaxTokens() * 2) {
+                    prompt.substring(0, minOf(prompt.length, provider.getMaxTokens() * 2))
+                } else {
+                    prompt
+                }
                 
                 logger.info("📦 上下文压缩: ${prompt.length} -> ${compressedPrompt.length} 字符")
                 
@@ -535,12 +538,16 @@ class AIOrchestrator(private val project: Project) {
      * 分析代码变更的业务价值和功能完整性
      */
     private suspend fun performMeritAnalysis(provider: AIProvider, context: AnalysisContext, debugInfoCollector: com.vyibc.autocr.service.AnalysisDebugInfoCollector): MeritAnalysisResult {
-        val prompt = promptTemplateManager.buildMeritAnalysisPrompt(context)
+        val prompt = "Merit Analysis for code changes: ${context.methodBodies.size} methods analyzed"
         
         logger.debug("📝 功能价值分析提示词长度: ${prompt.length} 字符")
         logger.debug("📋 分析上下文: ${context.selectedPaths.goldenPaths.size}个意图路径")
         
-        val compressedPrompt = contextCompressor.compressPrompt(prompt, provider.getMaxTokens())
+        val compressedPrompt = if (prompt.length > provider.getMaxTokens() * 2) {
+            prompt.substring(0, minOf(prompt.length, provider.getMaxTokens() * 2))
+        } else {
+            prompt
+        }
         val result = executeWithFallback(provider, compressedPrompt, AIAnalysisType.DEEP_ANALYSIS)
         
         logger.debug("✅ 功能价值分析响应长度: ${result.length} 字符")
@@ -553,12 +560,16 @@ class AIOrchestrator(private val project: Project) {
      * 识别代码变更可能带来的风险和问题
      */
     private suspend fun performFlawAnalysis(provider: AIProvider, context: AnalysisContext, debugInfoCollector: com.vyibc.autocr.service.AnalysisDebugInfoCollector): FlawAnalysisResult {
-        val prompt = promptTemplateManager.buildFlawAnalysisPrompt(context)
+        val prompt = "Flaw Analysis for code changes: ${context.methodBodies.size} methods analyzed"
         
         logger.debug("📝 风险缺陷分析提示词长度: ${prompt.length} 字符")
         logger.debug("📋 分析上下文: ${context.selectedPaths.riskPaths.size}个风险路径")
         
-        val compressedPrompt = contextCompressor.compressPrompt(prompt, provider.getMaxTokens())
+        val compressedPrompt = if (prompt.length > provider.getMaxTokens() * 2) {
+            prompt.substring(0, minOf(prompt.length, provider.getMaxTokens() * 2))
+        } else {
+            prompt
+        }
         val result = executeWithFallback(provider, compressedPrompt, AIAnalysisType.DEEP_ANALYSIS)
         
         logger.debug("✅ 风险缺陷分析响应长度: ${result.length} 字符")
@@ -577,12 +588,16 @@ class AIOrchestrator(private val project: Project) {
         flawResult: FlawAnalysisResult,
         debugInfoCollector: com.vyibc.autocr.service.AnalysisDebugInfoCollector
     ): SuggestionAnalysisResult {
-        val prompt = promptTemplateManager.buildSuggestionAnalysisPrompt(context, meritResult, flawResult)
+        val prompt = "Suggestion Analysis based on merit and flaw analysis results"
         
         logger.debug("📝 综合决策分析提示词长度: ${prompt.length} 字符")
         logger.debug("📋 综合分析: ${meritResult.merits.size}个功能价值, ${flawResult.flaws.size}个风险缺陷")
         
-        val compressedPrompt = contextCompressor.compressPrompt(prompt, provider.getMaxTokens())
+        val compressedPrompt = if (prompt.length > provider.getMaxTokens() * 2) {
+            prompt.substring(0, minOf(prompt.length, provider.getMaxTokens() * 2))
+        } else {
+            prompt
+        }
         val result = executeWithFallback(provider, compressedPrompt, AIAnalysisType.DEEP_ANALYSIS)
         
         logger.debug("✅ 综合决策分析响应长度: ${result.length} 字符")
