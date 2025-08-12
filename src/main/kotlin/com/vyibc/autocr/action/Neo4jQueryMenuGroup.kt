@@ -27,11 +27,13 @@ class Neo4jQueryMenuGroup : ActionGroup() {
         return when (elementInfo.type) {
             PsiElementAnalyzer.ElementType.CLASS -> arrayOf(
                 createTableQueryGroup(elementInfo),
-                createGraphQueryGroup(elementInfo)
+                createGraphQueryGroup(elementInfo),
+                createTreeQueryGroup(elementInfo)  // 新增Tree查询
             )
             PsiElementAnalyzer.ElementType.METHOD -> arrayOf(
                 createMethodTableQueryGroup(elementInfo),
-                createMethodGraphQueryGroup(elementInfo)
+                createMethodGraphQueryGroup(elementInfo),
+                createMethodTreeQueryGroup(elementInfo)  // 新增方法Tree查询
             )
             else -> emptyArray()
         }
@@ -531,5 +533,116 @@ class Neo4jQueryMenuGroup : ActionGroup() {
                    interface, interfaceMethod
             LIMIT 35
         """.trimIndent()
+    }
+    
+    // ================== Tree查询相关方法 ==================
+    
+    /**
+     * 创建类的Tree查询组
+     */
+    private fun createTreeQueryGroup(elementInfo: PsiElementAnalyzer.ElementInfo): ActionGroup {
+        return object : ActionGroup("🌲 Tree查询", "查看调用树和业务域信息", null) {
+            override fun getChildren(e: AnActionEvent?): Array<AnAction> {
+                return createClassTreeActions(elementInfo)
+            }
+        }
+    }
+    
+    /**
+     * 创建方法的Tree查询组
+     */
+    private fun createMethodTreeQueryGroup(elementInfo: PsiElementAnalyzer.ElementInfo): ActionGroup {
+        return object : ActionGroup("🌲 Tree查询", "查看方法的Tree归属和核心链路", null) {
+            override fun getChildren(e: AnActionEvent?): Array<AnAction> {
+                return createMethodTreeActions(elementInfo)
+            }
+        }
+    }
+    
+    /**
+     * 创建类的Tree查询动作
+     */
+    private fun createClassTreeActions(elementInfo: PsiElementAnalyzer.ElementInfo): Array<AnAction> {
+        val className = elementInfo.className ?: "Unknown"
+        return arrayOf(
+            ShowBusinessDomainAction(className),
+            ShowClassTreesAction(className),
+            ShowAllTreesAction()
+        )
+    }
+    
+    /**
+     * 创建方法的Tree查询动作
+     */
+    private fun createMethodTreeActions(elementInfo: PsiElementAnalyzer.ElementInfo): Array<AnAction> {
+        val className = elementInfo.className ?: "Unknown"
+        val methodName = elementInfo.methodName ?: "Unknown"
+        return arrayOf(
+            ShowMethodTreesAction(className, methodName),
+            ShowCorePathsAction(className, methodName),
+            ShowMethodWeightAction(className, methodName)
+        )
+    }
+}
+
+// ================== Tree查询动作类 ==================
+
+/**
+ * 显示业务域信息
+ */
+class ShowBusinessDomainAction(private val className: String) : AnAction("🏢 查看业务域", "显示类的业务域和相关信息", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        BusinessDomainDialog(project, className).show()
+    }
+}
+
+/**
+ * 显示类归属的Tree
+ */
+class ShowClassTreesAction(private val className: String) : AnAction("🌳 类的调用树", "显示类中方法归属的所有调用树", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        ClassTreesDialog(project, className).show()
+    }
+}
+
+/**
+ * 显示所有Tree概览
+ */
+class ShowAllTreesAction : AnAction("🌴 全部调用树", "显示系统中所有调用树的概览", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        AllTreesOverviewDialog(project).show()
+    }
+}
+
+/**
+ * 显示方法归属的Tree
+ */
+class ShowMethodTreesAction(private val className: String, private val methodName: String) : AnAction("🎯 方法归属树", "显示方法归属的调用树", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        MethodTreesDialog(project, className, methodName).show()
+    }
+}
+
+/**
+ * 显示核心链路
+ */
+class ShowCorePathsAction(private val className: String, private val methodName: String) : AnAction("🛤️ 核心链路", "显示方法的核心链路", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        CorePathsDialog(project, className, methodName).show()
+    }
+}
+
+/**
+ * 显示方法权重信息
+ */
+class ShowMethodWeightAction(private val className: String, private val methodName: String) : AnAction("⚖️ 权重信息", "显示方法的权重和重要性指标", null) {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        MethodWeightDialog(project, className, methodName).show()
     }
 }

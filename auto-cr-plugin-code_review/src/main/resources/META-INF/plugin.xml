@@ -1,0 +1,152 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.vyibc.auto-cr</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+    <name>Auto Code Review</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://www.vyibc.com">VYIBC</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+    <description><![CDATA[
+    A comprehensive development plugin for IntelliJ IDEA with translation and automatic code review features.<br>
+    <em>Features:</em>
+    <ul>
+        <li>Translate selected text with right-click context menu</li>
+        <li>Automatic code review during Git commits</li>
+        <li>AI-powered code quality assessment</li>
+        <li>Risk level evaluation and suggestions</li>
+        <li>Support for multiple languages</li>
+        <li>Configurable settings</li>
+    </ul>
+  ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.vcs</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 注册设置页面 -->
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.vyibc.autocrplugin.settings.TranslationConfigurable"
+            id="com.vyibc.autocrplugin.settings.TranslationConfigurable"
+            displayName="Translation Settings"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.vyibc.autocrplugin.settings.SimpleCodeReviewConfigurable"
+            id="com.vyibc.autocrplugin.settings.SimpleCodeReviewConfigurable"
+            displayName="Auto Code Review"/>
+
+        <!-- 注册设置服务 -->
+        <applicationService serviceImplementation="com.vyibc.autocrplugin.settings.TranslationSettings"/>
+        <applicationService serviceImplementation="com.vyibc.autocrplugin.settings.CodeReviewSettings"/>
+
+
+    </extensions>
+
+    <!-- Actions -->
+    <actions>
+        <!-- 翻译Action -->
+        <action id="com.vyibc.autocrplugin.action.TranslateAction"
+                class="com.vyibc.autocrplugin.action.TranslateAction"
+                text="Translate"
+                description="Translate selected text">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt T"/>
+        </action>
+
+        <!-- 代码评估Action -->
+        <action id="com.vyibc.autocrplugin.action.CommitAndReviewAction"
+                class="com.vyibc.autocrplugin.action.CommitAndReviewAction"
+                text="Commit and Review"
+                description="Commit code with automatic code review">
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <add-to-group group-id="ChangesViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="Vcs.Operations.Popup" anchor="last"/>
+            <add-to-group group-id="VcsGlobalGroup" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+
+        <!-- 提交评估工具栏Action -->
+        <action id="com.vyibc.autocrplugin.action.CommitReviewToolbarAction"
+                class="com.vyibc.autocrplugin.action.CommitReviewToolbarAction"
+                text="Commit &amp; Review"
+                description="Review code and commit">
+            <add-to-group group-id="ChangesViewToolbar" anchor="after" relative-to-action="ChangesView.Commit"/>
+            <add-to-group group-id="VcsToolbarActions" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift M"/>
+        </action>
+
+        <!-- 快速代码评估Action -->
+        <action id="com.vyibc.autocrplugin.action.QuickCodeReviewAction"
+                class="com.vyibc.autocrplugin.action.QuickCodeReviewAction"
+                text="Code Review"
+                description="Review current changes before commit">
+            <add-to-group group-id="ChangesViewPopupMenu" anchor="first"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift R"/>
+        </action>
+
+        <!-- 测试代码评估Action -->
+        <action id="com.vyibc.autocrplugin.action.TestCodeReviewAction"
+                class="com.vyibc.autocrplugin.action.TestCodeReviewAction"
+                text="Test Code Review"
+                description="Test code review functionality with mock data">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt shift R"/>
+        </action>
+
+        <!-- 评估已暂存变更Action -->
+        <action id="com.vyibc.autocrplugin.action.ReviewStagedChangesAction"
+                class="com.vyibc.autocrplugin.action.ReviewStagedChangesAction"
+                text="Review Staged Changes"
+                description="Review git add changes before commit">
+            <add-to-group group-id="ChangesViewToolbar" anchor="after" relative-to-action="ChangesView.Commit"/>
+            <add-to-group group-id="ChangesViewPopupMenu" anchor="after" relative-to-action="ChangesView.Commit"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift A"/>
+        </action>
+
+        <!-- 评估已提交变更Action -->
+        <action id="com.vyibc.autocrplugin.action.ReviewCommittedChangesAction"
+                class="com.vyibc.autocrplugin.action.ReviewCommittedChangesAction"
+                text="Review Committed Changes"
+                description="Review git commit changes before push">
+            <add-to-group group-id="ChangesViewToolbar" anchor="last"/>
+            <add-to-group group-id="ChangesViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift P"/>
+        </action>
+
+        <!-- 右键菜单代码评估Action -->
+        <action id="com.vyibc.autocrplugin.action.QuickCodeReviewMenuAction"
+                class="com.vyibc.autocrplugin.action.QuickCodeReviewMenuAction"
+                text="Code Review"
+                description="Quick code review from context menu">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="ConsoleEditorPopupMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt C"/>
+        </action>
+
+        <!-- 插件状态检查Action -->
+        <action id="com.vyibc.autocrplugin.action.PluginStatusAction"
+                class="com.vyibc.autocrplugin.action.PluginStatusAction"
+                text="Auto CR Plugin Status"
+                description="Check plugin status and configuration">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
