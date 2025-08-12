@@ -95,22 +95,83 @@ class CallTreeBuilder {
             return false
         }
         
-        // 应该是有意义的业务方法（通过方法名判断）
+        // 检查类级别是否有Spring MVC相关注解（通常Controller类会有@Controller或@RestController）
+        val classAnnotations = controllerClass.annotations
+        val hasControllerClassAnnotation = classAnnotations.any { annotation ->
+            annotation.contains("Controller") ||
+            annotation.contains("RestController") ||
+            annotation.contains("RequestMapping")
+        }
+        
+        // 如果类有Controller注解，则检查方法是否符合Controller方法特征
+        if (hasControllerClassAnnotation) {
+            // 检查方法参数是否包含Web框架相关的参数类型
+            if (hasWebFrameworkParameters(method)) {
+                return true
+            }
+            
+            // 或者检查方法名是否符合REST API模式
+            val methodName = method.name.lowercase()
+            val hasRestMethodPattern = methodName.startsWith("get") ||
+                    methodName.startsWith("post") ||
+                    methodName.startsWith("put") ||
+                    methodName.startsWith("delete") ||
+                    methodName.startsWith("create") ||
+                    methodName.startsWith("update") ||
+                    methodName.startsWith("remove") ||
+                    methodName.startsWith("find") ||
+                    methodName.startsWith("search") ||
+                    methodName.startsWith("list") ||
+                    methodName.startsWith("regist") ||
+                    methodName.startsWith("register") ||
+                    methodName.startsWith("login") ||
+                    methodName.startsWith("logout")
+            
+            if (hasRestMethodPattern) {
+                return true
+            }
+        }
+        
+        // 如果没有明确的Controller注解，退回到方法名匹配（作为后备方案）
         val methodName = method.name.lowercase()
-        val hasControllerMethodPattern = methodName.startsWith("handle") ||
-                methodName.startsWith("process") ||
-                methodName.startsWith("get") ||
-                methodName.startsWith("post") ||
-                methodName.startsWith("put") ||
-                methodName.startsWith("delete") ||
-                methodName.startsWith("create") ||
-                methodName.startsWith("update") ||
-                methodName.startsWith("remove") ||
-                methodName.startsWith("find") ||
-                methodName.startsWith("search") ||
-                methodName.startsWith("list")
+        val hasControllerMethodPattern = methodName.startsWith("regist") ||
+                methodName.startsWith("register") ||
+                methodName.startsWith("login") ||
+                methodName.startsWith("logout") ||
+                methodName.startsWith("upload") ||
+                methodName.startsWith("download") ||
+                methodName.startsWith("save") ||
+                methodName.startsWith("edit") ||
+                methodName.startsWith("modify") ||
+                methodName.startsWith("cancel") ||
+                methodName.startsWith("handle") ||
+                methodName.startsWith("process")
         
         return hasControllerMethodPattern
+    }
+    
+    /**
+     * 检查方法参数是否包含Web框架相关的参数
+     */
+    private fun hasWebFrameworkParameters(method: MethodNode): Boolean {
+        val parameters = method.parameters
+        return parameters.any { param ->
+            val paramType = param.type
+            paramType.contains("HttpServletRequest") ||
+            paramType.contains("HttpServletResponse") ||
+            paramType.contains("HttpSession") ||
+            paramType.contains("Model") ||
+            paramType.contains("ModelAndView") ||
+            paramType.contains("RequestParam") ||
+            paramType.contains("PathVariable") ||
+            paramType.contains("RequestBody") ||
+            paramType.contains("ResponseEntity") ||
+            paramType.contains("MultipartFile") ||
+            // 常见的DTO后缀
+            paramType.endsWith("Request") ||
+            paramType.endsWith("DTO") ||
+            paramType.endsWith("Form")
+        }
     }
     
     /**
