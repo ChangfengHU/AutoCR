@@ -6,9 +6,9 @@
 
 ```
 docs/development-logs/
-├── README.md                           # 本文件，开发日志索引
-├── Tree-Dimension-Development-Log.md   # Neo4j Tree维度开发日志
-└── [future-logs]                       # 未来的开发日志
+├── README.md                                      # 本文件，开发日志索引
+├── Tree-Dimension-Development-Log.md              # Neo4j Tree维度开发日志
+└── GraphRAG-Inspired-Design-Enhancement.md       # GraphRAG启发式设计改造方案
 ```
 
 ## 日志列表
@@ -17,19 +17,30 @@ docs/development-logs/
 - **文件**: `Tree-Dimension-Development-Log.md`
 - **日期**: 2025年8月12日
 - **内容**: Neo4j Tree维度重构完整开发记录
-- **状态**: ✅ 已完成
+- **状态**: ✅ 已完成（包含根节点逻辑修复）
 - **关键功能**:
-  - Tree构建算法
+  - Tree构建算法（基于注解识别根节点）
   - 交叉统计和权重计算
   - 业务域分析
   - 核心链路分析
-  - UI界面集成
+  - UI界面集成（修复根节点显示逻辑）
+
+### 🧠 GraphRAG启发式设计改造
+- **文件**: `GraphRAG-Inspired-Design-Enhancement.md`
+- **日期**: 2025年8月13日
+- **内容**: 基于Microsoft GraphRAG设计理念的AutoCR系统改造方案
+- **状态**: 🎯 设计方案
+- **核心价值**:
+  - 深度分析GraphRAG的实体-关系-社区模型
+  - 解决"不知道用户在做什么业务逻辑"的核心痛点
+  - 提出语义实体提取、业务意图推理等创新架构
+  - 从静态代码分析升级为智能业务理解
 
 ## 日志规范
 
 ### 命名约定
-- 格式: `[功能模块]-Development-Log.md`
-- 示例: `Tree-Dimension-Development-Log.md`
+- 格式: `[功能模块]-Development-Log.md` 或 `[主题]-Design-Enhancement.md`
+- 示例: `Tree-Dimension-Development-Log.md`, `GraphRAG-Inspired-Design-Enhancement.md`
 - 使用中划线分隔，首字母大写
 
 ### 内容结构
@@ -70,6 +81,16 @@ docs/development-logs/
    - 短期优化
    - 长期扩展
 
+### 设计文档结构
+设计文档应包含：
+
+1. **摘要与背景**
+2. **现状分析与痛点**
+3. **设计理念与借鉴**
+4. **核心架构设计**
+5. **实施路径与风险**
+6. **预期效果与价值**
+
 ### 更新流程
 1. 开发新功能时创建对应日志文件
 2. 开发过程中持续更新日志内容
@@ -88,15 +109,18 @@ ls -la
 
 # 使用VS Code打开特定日志
 code Tree-Dimension-Development-Log.md
+code GraphRAG-Inspired-Design-Enhancement.md
 ```
 
 ### 搜索内容
 ```bash
 # 在所有日志中搜索关键词
-grep -r "关键词" .
+grep -r "GraphRAG" .
+grep -r "Tree构建" .
 
 # 搜索特定类型的内容
 grep -r "算法" *.md
+grep -r "设计理念" *.md
 ```
 
 ## 贡献指南
@@ -113,8 +137,32 @@ grep -r "算法" *.md
 - 补充遗漏的重要细节
 - 保持格式一致性
 
+### 交叉引用
+- 在相关日志间建立链接
+- 引用具体的技术方案
+- 标注依赖关系和影响范围
+
+## 设计演进历程
+
+### 第一阶段：基础功能建设
+- ✅ Neo4j知识图谱构建
+- ✅ Tree维度建模
+- ✅ 基础UI交互
+
+### 第二阶段：智能化升级  
+- 🎯 GraphRAG理念引入
+- 🎯 业务意图理解
+- 🎯 智能影响分析
+- 🎯 语义化代码理解
+
+### 未来阶段：AI驱动的代码智能助手
+- 🔮 深度学习模型集成
+- 🔮 实时代码理解和建议
+- 🔮 团队协作智能化
+- 🔮 企业级知识管理
+
 ---
 
 **维护者**: AutoCR开发团队  
-**最后更新**: 2025年8月12日  
-**版本**: v1.0
+**最后更新**: 2025年8月13日  
+**版本**: v2.0
